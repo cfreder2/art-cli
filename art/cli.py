@@ -431,6 +431,29 @@ def _issue_note(subject, sheet) -> str:
             + "; ".join(parts) + ".")
 
 
+def _backdrop_warning(prof, subject) -> str:
+    """Whether this subject's backdrop would be keyed out of the character."""
+    ref = next((r for r in resolve_refs(prof, subject) if r.role == "identity"), None)
+    if ref is None:
+        return ""
+    try:
+        import numpy as np
+        from PIL import Image
+        a = np.asarray(Image.open(ref.path).convert("RGB"))
+    except Exception:
+        return ""
+    art = ~((a > 235).all(axis=-1))
+    key = backdrop_for(prof, subject)
+    bad = cut_mod.spill_conflict(a, cut_mod.hex_to_rgb(key), art)
+    if bad <= 0.30:
+        return ""
+    ranked = cut_mod.best_backdrop(a, art)
+    safe = ", ".join(f"{n} ({v})" for n, v, score in ranked[:2] if score <= 0.10)
+    return (f"{key} would despill {bad * 100:.0f}% of this character's own pixels "
+            f"-- its dominant channel is the character's too."
+            + (f" Try {safe}." if safe else ""))
+
+
 def _sheet_for(prof, name):
     """Resolve `frog-1` or `frog` to (subject, sheet plan, whole plan)."""
     for sub_name, subject in prof.subjects.items():
@@ -694,7 +717,8 @@ def draw(ctx, sheet, note, model, dry_run) -> None:
 
 # ---------------------------------------------------------------- view --
 
-def _candidate_rows(path, backdrop, names, expect, write_to, wrapped=0):
+def _candidate_rows(path, backdrop, names, expect, write_to, wrapped=0,
+                    gallery=False):
     """Detect the frames on a generated sheet, and write it out KEYED.
 
     Writing the raw sheet would leave every frame sitting in a rectangle of
@@ -710,6 +734,18 @@ def _candidate_rows(path, backdrop, names, expect, write_to, wrapped=0):
     Image.fromarray(cut_mod.keyed(rgb, key)).save(write_to)
 
     out, short, extra = {}, [], []
+
+    if gallery:
+        # One cell per entry, row-major: the detector reads rows top to bottom
+        # and cells left to right within a row, which is the order they were
+        # asked for.
+        boxes = [b for row in rows for b in row.boxes]
+        for i, b in enumerate(boxes):
+            if i < len(names):
+                out[names[i]] = [b.as_list()]
+        if len(boxes) != len(names):
+            short.append(f"{len(boxes)} of {len(names)} entries")
+        return out, short, extra
 
     if wrapped:
         # The whole grid is ONE animation. Rows are a layout, not a list of
@@ -1045,10 +1081,17 @@ def view(ctx, subject, candidates, port, no_open) -> None:
                 self.send_error(400, "not a file in this project"); return
 
             served = f"version-{abs(hash(rel)) % 10**8}.png"
+            # Which sheet this file belongs to decides how it is cut. It used to
+            # read a single set of names captured from the enclosing scope,
+            # which stopped existing when a subject grew a sheet per animation.
+            sh = by_name.get(path.stem.rsplit("-", 1)[0]) or by_name.get(path.stem)
+            if sh is None:
+                self.send_error(400, "no sheet in this project matches that file")
+                return
             try:
                 detected, short, _ = _candidate_rows(
-                    path, backdrop_for(prof, sub), anim_names, expect,
-                    serve / served, wrapped=wrapped)
+                    path, backdrop_for(prof, sub), sh.anims, sh.cols,
+                    serve / served, wrapped=sh.wrapped, gallery=sh.gallery)
             except Exception as exc:
                 self.send_error(400, f"could not cut it: {exc}"); return
             ref = next((v[0][3] for k, v in detected.items() if k == "idle"),

@@ -136,7 +136,14 @@ def merge(atlas_png: Path, atlas_json: Path, replacements: list[Replacement],
         y += max(img.height for _, _, img in s) + GUTTER
 
     for rep in replacements:
-        data.setdefault(rep.group, {})[rep.anim] = placed[(rep.group, rep.anim)]
+        frames = placed[(rep.group, rep.anim)]
+        # A terrain entry is ONE frame written flat -- `tiles.tree` is
+        # [x, y, w, h, inset], not a list of frames -- and the game indexes it
+        # directly. Match whatever the atlas already does for that key rather
+        # than deciding: it is the only thing that knows.
+        was = (data.get(rep.group) or {}).get(rep.anim)
+        flat = isinstance(was, list) and was and isinstance(was[0], (int, float))
+        data.setdefault(rep.group, {})[rep.anim] = frames[0] if flat else frames
 
     scales = dict(data.get("scales") or {})
     anims = dict(data.get("anims") or {})

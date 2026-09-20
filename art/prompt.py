@@ -82,7 +82,24 @@ def build(
 ) -> str:
     facing = subject.raw.get("facing", "right")
     anim_notes = subject.raw.get("anims") or {}
-    if sheet.wrapped:
+    if sheet.gallery:
+        described = [
+            f"  {sheet.cols} columns x {sheet.rows} rows, ONE separate item per "
+            f"cell, read left to right along the top row then continue on the "
+            f"next. They are NOT frames of an animation -- each cell is a "
+            f"different thing, and they share this sheet so that they share a "
+            f"material, a palette and a light direction.",
+            "  The cells, in order:",
+        ]
+        for i, name in enumerate(sheet.anims, 1):
+            note = anim_notes.get(name, name)
+            text = note.get("summary", "") if isinstance(note, dict) else note
+            described.append(f"    Cell {i}: {name} — {text}")
+        if sheet.cols * sheet.rows > len(sheet.anims):
+            described.append(
+                f"  The last {sheet.cols * sheet.rows - len(sheet.anims)} cell(s) "
+                "are left completely EMPTY -- flat background, nothing drawn.")
+    elif sheet.wrapped:
         only = sheet.anims[0]
         note = anim_notes.get(only, "a " + only + " cycle")
         summary = note.get("summary", "") if isinstance(note, dict) else note

@@ -50,6 +50,7 @@ class SheetPlan:
     min_drawn: int
     facings: int
     wrapped: int = 0       # frames in ONE animation laid across the whole grid
+    gallery: bool = False  # one cell per animation, row-major
 
     @property
     def fits(self) -> bool:
@@ -109,7 +110,9 @@ def plan_subject(
     notes: list[str] = []
     facings, mirror = facings_for(subject)
 
-    if subject.kind == "tile":
+    # A tile subject with sheets written for it is a gallery of tiles sharing a
+    # sheet, not one tile on its own grid.
+    if subject.kind == "tile" and not subject.sheets:
         cell = profile.tile_px
         per_side = max(1, canvas // cell)
         return SubjectPlan(
@@ -171,6 +174,23 @@ def plan_subject(
         anims = list(anims)
 
         cols_override = forced.get(sheet_name)
+
+        # A GALLERY: several single-frame entries sharing one sheet, one per
+        # cell. Terrain is twenty-seven separate subjects that want to be drawn
+        # together so they share a material -- a dirt that does not match its
+        # own ground is worse than either drawn alone.
+        if cols_override and len(anims) > 1 and all(
+                counts.get(a, 1) == 1 for a in anims):
+            cols = int(cols_override)
+            rows = -(-len(anims) // cols)
+            sheets.append(SheetPlan(
+                sheet_name, anims, cols, rows,
+                canvas // cols, canvas // rows, min_drawn, facings,
+                gallery=True))
+            notes.append(f"`{sheet_name}`: {len(anims)} entries laid {cols}×{rows}, "
+                         f"one per cell, read left to right then top to bottom")
+            continue
+
         if cols_override and len(anims) == 1:
             # One animation wrapped across the grid. The cutter reads rows top
             # to bottom and frames left to right within a row, so concatenating
