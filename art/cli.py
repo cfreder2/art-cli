@@ -596,13 +596,19 @@ def _candidate_rows(path, backdrop, names, expect, write_to):
     write_to.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(cut_mod.keyed(rgb, key)).save(write_to)
 
-    out, short = {}, []
+    out, short, extra = {}, [], []
     for i, row in enumerate(rows):
-        name = names[i] if i < len(names) else f"row{i + 1}"
+        # A sheet can hold rows the profile no longer wants -- the frog's
+        # candidate still carries the `sit` row that was retired after it was
+        # drawn. Naming it `row3` hides that; saying it is unassigned does not.
+        named = i < len(names)
+        name = names[i] if named else f"unassigned row {i + 1}"
         out[name] = [b.as_list() for b in row.boxes]
+        if not named:
+            extra.append(name)
         if not row.complete:
             short.append(f"{name} ({len(row.boxes)} of {expect})")
-    return out, short
+    return out, short, extra
 
 
 @main.command()
@@ -662,11 +668,15 @@ def view(ctx, subject, candidate, port, no_open) -> None:
     if candidate:
         pl = plan_subject(prof, sub, groups)
         expect = pl.sheets[0].cols if pl.sheets else None
-        detected, short = _candidate_rows(
+        detected, short, extra = _candidate_rows(
             candidate, prof.backdrop, anim_names, expect, serve / "candidate.png")
         if short:
             console.print("[yellow]incomplete rows:[/yellow] " + ", ".join(short)
                           + " [dim]— frames touching, below the 24px the rules ask for[/dim]")
+        if extra:
+            console.print(f"[yellow]{len(extra)} row(s) on the sheet the profile "
+                          f"does not name[/yellow] [dim]— drawn before the "
+                          f"animation list changed; harmless, and dropped by pack[/dim]")
         ref = next((v[0][3] for k, v in detected.items() if k == "idle"),
                    next(iter(detected.values()))[0][3] if detected else 1)
         for name, frames in detected.items():

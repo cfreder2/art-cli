@@ -752,3 +752,44 @@ They are tuned **in the preview**, with a slider per parameter and a Save that
 writes back to art.yaml. That is the loop the whole tool is shaped around:
 generated art is expensive and slow, and everything that can be adjusted
 without regenerating should be adjustable while looking at it.
+
+
+---
+
+# Consolidating `sit` into `idle`
+
+Mr Frog had two resting rows. In the code they meant different things: `sit`
+is terminal, set once at `game.js:1788` when he reaches his lily pad and
+finishes speaking -- *"he lives here now"* -- and `idle` is everything else
+on the ground.
+
+In the art they meant nothing. Measured off the generated sheet, `idle[0]` and
+`sit[0]` overlap **95.7%** by silhouette, at the same heights, with the same
+three beats. The original 45px sheet has the same problem, so the generator
+faithfully reproduced an ambiguity that was already in the reference -- which
+is what an `identity` reference is supposed to do.
+
+Two identical rows is a row of every sheet spent on nothing, and at six
+columns per row that is a sixth of the character's pixels. So they are one row
+now, and `idle` is the survivor: it plays for essentially the whole level,
+while `sit` is a single moment at the end.
+
+The `game.js` change is three lines to one:
+
+```js
+const row = f.vy !== 0 ? 'jump' : 'idle';
+```
+
+`friendSettled` keeps its other two jobs -- it is what stops him moving and
+turns him around -- so that he has arrived is still told, by where he is
+standing and which way he faces, rather than by a second drawing of the same
+pose.
+
+Retiring a row the game still asks for would have been worse than leaving it:
+`drawFriend` returns early when `S.row()` comes back empty, so the frog would
+have vanished the moment he settled. Consolidation is a change to both the
+profile and the code, never to the profile alone.
+
+A sheet drawn before an animation list changed still carries the extra row.
+The preview names it `unassigned row N` rather than `row3`, and says why:
+hiding it behind a positional name is how a stale row gets packed.
