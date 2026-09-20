@@ -18,8 +18,44 @@ from art.plan import SheetPlan, SubjectPlan
 from art.profile import Profile, Subject
 from art.refs import Reference, prompt_block
 
-# Rules every sheet must follow. AXI's ASSET_SPEC.md section 7, which is a list
-# of failures rather than a list of preferences.
+# Rules for a TILE sheet. A terrain tile is not a small character: it is
+# repeated edge to edge, so the two rules that keep a character readable are
+# exactly wrong for it. An outline becomes a grid line drawn across the world
+# every time the tile repeats, and a transparent margin becomes a gap.
+TILE_RULES = [
+    "Each cell holds ONE SQUARE tile, drawn as a perfect square and filling "
+    "that square completely, corner to corner. No margin, no rounded corners, "
+    "no padding -- the artwork runs off all four edges.",
+    "NO OUTLINE around a tile, and no border, frame or edging of any kind. A "
+    "tile is a patch of material, and an outline becomes a line ruled across "
+    "the world every time it repeats.",
+    "{seam}",
+    "The background is FLAT {backdrop} and shows ONLY in the gaps BETWEEN "
+    "cells, never inside a tile.",
+    "At least 24px of clear background between cells so they can be cut apart.",
+    "No labels, no text, no numbers, no grid lines and no cell borders in the "
+    "OUTPUT. The reference images carry labels; those are for reading.",
+    "Every tile on this sheet shares ONE palette, ONE light direction and ONE "
+    "level of detail, so they read as the same world when laid side by side.",
+]
+
+SEAM_RULES = {
+    "horizontal": "It TILES SIDE BY SIDE: the artwork running off its LEFT edge "
+                  "must continue exactly into what runs off its RIGHT edge, so "
+                  "a row of them reads as one continuous surface with no seam. "
+                  "It is never stacked vertically, so top and bottom need not "
+                  "match.",
+    "vertical":   "It TILES TOP TO BOTTOM: the artwork running off its TOP edge "
+                  "must continue exactly into what runs off its BOTTOM edge, so "
+                  "a column of them reads as continuous with no seam.",
+    "both":       "It TILES IN BOTH DIRECTIONS: left edge continues into right, "
+                  "and top into bottom, so a field of them is seamless.",
+    None:         "It is used on its own and does not repeat, so its edges need "
+                  "not match.",
+}
+
+# Rules every CHARACTER sheet must follow. AXI's ASSET_SPEC.md section 7, which
+# is a list of failures rather than a list of preferences.
 SHEET_RULES = [
     "The background is FLAT {backdrop} and nothing else. Not white, not a "
     "gradient, not a scene. It must be a colour the artwork never uses, so it "
@@ -125,9 +161,16 @@ def build(
             described += ["  " + line for line in _per_frame(note, sheet.cols)]
 
     from art.profile import backdrop_for
+    backdrop = backdrop_for(profile, subject)
+    if subject.kind == "tile":
+        seam = SEAM_RULES.get(subject.raw.get("seamless"), SEAM_RULES["both"])
+        source = TILE_RULES
+    else:
+        seam = ""
+        source = SHEET_RULES
     rules = "\n".join(
-        f"- {r.format(backdrop=backdrop_for(profile, subject), facing=facing)}"
-        for r in SHEET_RULES
+        f"- {r.format(backdrop=backdrop, facing=facing, seam=seam)}"
+        for r in source
     )
 
     parts = [
@@ -138,13 +181,16 @@ def build(
         "",
         f"Sheet: {sheet.cols} columns x {sheet.rows} rows, evenly spaced. "
         f"Each cell is about {sheet.cell_w}x{sheet.cell_h}px.",
-        ("Layout:" if sheet.wrapped else "Rows, top to bottom:"),
+        ("Layout:" if (sheet.wrapped or sheet.gallery) else "Rows, top to bottom:"),
         *described,
         "",
-        f"Size: the character must be AT LEAST {sheet.min_drawn}px tall in every "
+        (f"Size: draw each tile as a SQUARE at least {sheet.min_drawn}px on a "
+         f"side, filling its square completely."
+         if subject.kind == "tile" else
+         f"Size: the character must be AT LEAST {sheet.min_drawn}px tall in every "
         f"frame -- that is the point of this sheet, and a smaller drawing is the "
         f"defect being fixed. Fill the cell; leave about 20% of room for a pose "
-        f"that is taller or wider than the others.",
+        f"that is taller or wider than the others."),
         "",
         "Constraints:",
         rules,

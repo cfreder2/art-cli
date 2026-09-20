@@ -36,3 +36,15 @@ def test_a_transparent_margin_is_measured():
     alpha = np.zeros((32, 32), dtype=np.uint8)
     alpha[4:28, 6:30] = 255
     assert transparent_margin(alpha) == {"left": 6, "right": 2, "top": 4, "bottom": 4}
+
+
+def test_a_tiny_step_on_a_smooth_tile_is_not_a_seam():
+    """Still water varies by about one level internally, so a two-level wrap --
+    invisible out of 255 -- divides into a ratio that looks alarming."""
+    from art.seams import SeamScore
+    assert SeamScore("vertical", ratio=2.2, wrap_diff=2.3, typical=1.03).seamless
+
+
+def test_a_large_step_is_a_seam_however_noisy_the_tile():
+    from art.seams import SeamScore
+    assert not SeamScore("horizontal", ratio=2.5, wrap_diff=10.2, typical=4.05).seamless

@@ -1569,3 +1569,63 @@ intent; the call site is the fact.
 
 That third kind did not exist in the design. A band is sized by its height and
 tiled by its width, which is neither of the other two.
+
+---
+
+# Tiles: three things the generator cannot do, and one the atlas undid
+
+## A generator cannot draw a seamless tile
+
+Asked plainly, in detail, with the wrap named in its own sentence, AXI's ground
+family came back at **13.1x, 9.8x, 5.7x and 4.1x** the tile's own internal step
+across the wrap. Rewording will not fix it: the model has no way to reason about
+what its right edge will sit next to.
+
+So `seamless.py` does it. Blend the tile with a copy of itself rolled by half,
+weighted zero at both edges and one in the middle. At the left edge the result
+is entirely the rolled copy -- which there is the tile's own middle -- and at
+the right edge it is the column beside that middle. Two columns that were
+adjacent in the original become the wrap, so the wrap is continuous **by
+construction**. Every tile went to ~1.0x.
+
+The cost is honest: the middle blends with itself, so fine detail softens. For
+ground, moss, water and stone that is invisible.
+
+## Lossy compression undoes it, and the gutter is why
+
+Packed, `water_col` measured **10.0x** again -- from 1.1x. Compressed on its own
+it measured 2.4x, so the compression was not the whole story: **its neighbours
+in the atlas were bleeding across its edges.** WebP works in 16px blocks and
+will average a tile's edge together with whatever was packed beside it, and a
+seamless tile is exactly where that hurts, because its two edges have to match
+each other while the neighbours bleeding in differ on each side.
+
+`GUTTER` was 2px -- enough to stop a draw call sampling a neighbour, nowhere
+near a compression block. At **18px**: water_col 10.0x -> 2.2x, vine 4.6x ->
+1.6x, for 0.1MB.
+
+## The seam metric needed an absolute floor
+
+Still water varies about **one level** internally, so a two-level wrap -- which
+cannot be seen out of 255 -- divides into a ratio of 2.2 and reads as a failure,
+while a noisy dirt with a **ten-level** wrap reads as 2.5. Only one of those is a
+line on screen. A wrap is seamless now if the ratio is low **or** the absolute
+step is under four levels.
+
+## Rules written for characters are wrong for tiles
+
+Three of them, each caught by the gate refusing a sheet:
+
+- **Outline.** The character rule demands one. A tile must NOT have one -- an
+  outline becomes a line ruled across the world every time it repeats -- so
+  checking for it is backwards.
+- **Exact size.** 192x192 is the size a tile is DRAWN at, not stored at. A
+  larger source is headroom, not a defect: 192 on a laptop is 320 on a 5K
+  display. Square and at least a tile.
+- **What "outline" even means.** The rule tested whether the edge was darker
+  than the fill, which fails a ground tile -- bright grass over dark earth reads
+  as an edge 30 levels *brighter* -- and fails a glassy gem for having a bright
+  rim. What actually went wrong on the navy sheet was an outline close enough to
+  the backdrop that keying took it too, so that is what is measured now. And it
+  measures the KEYED art, not the plate, where every antialiased edge is a blend
+  with the backdrop by definition.

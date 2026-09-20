@@ -8,6 +8,8 @@ from art.cut import Box, hex_to_rgb
 
 GREEN = hex_to_rgb("#00FF00")
 
+GREEN = hex_to_rgb("#00FF00")
+
 
 def box(w=100, h=100, lift=0):
     b = Box(0, 0, w, h); b.lift = lift; return b
@@ -46,15 +48,27 @@ def test_backdrop_left_inside_the_art_is_a_halo():
     assert len(rules.halo(rgb, alpha, GREEN, "x")) == 1
 
 
-def test_an_outline_eaten_by_the_key_is_caught():
-    """It happened to Sir Croaks on the navy sheet, in every frame."""
+def test_an_outline_the_key_would_eat_is_caught():
+    """It happened to Sir Croaks on the navy sheet, in every frame: the outline
+    sat close enough to the backdrop that keying took it too."""
     alpha = np.zeros((40, 40), float); alpha[5:35, 5:35] = 1.0
-    flat = np.full((40, 40, 3), 200, np.uint8)
-    assert len(rules.outline(flat, alpha, "x")) == 1       # no outline at all
-    outlined = flat.copy()
+    art = np.full((40, 40, 3), 200, np.uint8)
     edge = rules._silhouette_edge(alpha)
-    outlined[edge] = 40
-    assert rules.outline(outlined, alpha, "x") == []
+
+    at_risk = art.copy(); at_risk[edge] = GREEN            # edge IS the backdrop
+    assert len(rules.outline(at_risk, alpha, GREEN, "x")) == 1
+
+    safe = art.copy(); safe[edge] = (40, 20, 30)           # a dark outline
+    assert rules.outline(safe, alpha, GREEN, "x") == []
+
+
+def test_a_bright_edge_is_not_a_missing_outline():
+    """A ground tile is bright grass over dark earth, and a glassy gem has a
+    bright rim. Testing "darker than the fill" failed both."""
+    alpha = np.ones((40, 40), float)
+    art = np.full((40, 40, 3), 60, np.uint8)
+    art[rules._silhouette_edge(alpha)] = (240, 250, 235)
+    assert rules.outline(art, alpha, GREEN, "x") == []
 
 
 def test_a_terrain_margin_is_a_seam():
@@ -74,3 +88,18 @@ def test_baseline_spread_warns_but_does_not_fail():
 
 def test_a_planted_row_is_silent():
     assert rules.baseline_spread([box(h=100, lift=0), box(h=100, lift=3)], "x") == []
+
+
+def test_a_soft_edge_is_not_an_eaten_outline():
+    """A cloud and a mossy log both have a band of semi-transparent pixels
+    leaning toward the backdrop. That is what a soft edge is, and both composite
+    cleanly on white and on dark."""
+    alpha = np.zeros((60, 60), float)
+    alpha[10:50, 10:50] = 1.0
+    # a two-pixel fringe of half-transparent, backdrop-tinted pixels
+    alpha[8:10, 8:52] = alpha[50:52, 8:52] = 0.45
+    alpha[8:52, 8:10] = alpha[8:52, 50:52] = 0.45
+    art = np.full((60, 60, 3), 210, np.uint8)
+    art[alpha == 0.45] = GREEN
+    art[rules._silhouette_edge(alpha, threshold=0.85)] = (30, 25, 40)
+    assert rules.outline(art, alpha, GREEN, "cloud") == []

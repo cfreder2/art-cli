@@ -30,9 +30,18 @@ from PIL import Image
 
 from art import cut as cut_mod
 
-# Gap between packed frames, so a rounding error in a draw call cannot bleed a
-# neighbouring frame's pixels into one being drawn.
-GUTTER = 2
+# Gap between packed frames. Two pixels is enough to stop a rounding error in a
+# draw call sampling a neighbour -- and not nearly enough under lossy
+# compression, which works in 16px blocks and will happily average a tile's
+# edge together with whatever was packed beside it. A seamless tile is exactly
+# where that hurts: its two edges have to match each other, and the neighbours
+# bleeding in are different on each side. Measured on water_col, the wrap went
+# from 2.4x compressed alone to 10.0x compressed in the atlas.
+GUTTER = 18
+
+# WebP cannot encode either dimension past this. PNG can, but an atlas that
+# only WebP cannot hold is an atlas that cannot ship.
+MAX_SIDE = 16383
 
 
 @dataclass
@@ -57,13 +66,21 @@ class PackResult:
 
 
 def cut_sheet(path: Path, backdrop: str, names: list[str],
-              cols: int | None, wrapped: int
+              cols: int | None, wrapped: int, gallery: bool = False
               ) -> tuple[Image.Image, dict[str, list[cut_mod.Box]]]:
     """Key a sheet and return its frames, by animation name."""
     rgb = np.asarray(Image.open(path).convert("RGB"))
     key = cut_mod.hex_to_rgb(backdrop)
     _, rows = cut_mod.detect(rgb, key, expect=cols)
     keyed = Image.fromarray(cut_mod.keyed(rgb, key))
+
+    if gallery:
+        # One cell per entry, row-major. Mapping rows to names positionally --
+        # which is right for a sheet of animations -- gave a six-entry terrain
+        # sheet in two rows only two of its six entries, and left the other
+        # four as the art they were meant to replace.
+        boxes = [b for r in rows for b in r.boxes]
+        return keyed, {n: [b] for n, b in zip(names, boxes)}
 
     if wrapped:
         boxes = [b for r in rows for b in r.boxes]
@@ -106,21 +123,35 @@ def merge(atlas_png: Path, atlas_json: Path, replacements: list[Replacement],
     base = Image.open(atlas_png).convert("RGBA")
     data = json.loads(atlas_json.read_text())
 
-    # Shelf-pack the new frames into rows no wider than the atlas.
+    # How wide to make the new region. Appending everything below in the old
+    # atlas's 1024px column made a strip 20,000px tall, which WebP cannot
+    # encode at all -- so the canvas widens toward square instead of growing
+    # only downward.
+    new = [img for rep in replacements for img in rep.images]
+    area = sum(img.width * img.height for img in new)
+    widest = max((img.width for img in new), default=1)
+    width = max(base.width, widest + GUTTER, int((area * 1.25) ** 0.5))
+    width = min(width, MAX_SIDE)
+
     shelves: list[list[tuple[Replacement, int, Image.Image]]] = []
-    x, row_h, shelf = 0, 0, []
+    x, shelf = 0, []
     for rep in replacements:
-        for i, (box, img) in enumerate(zip(rep.frames, rep.images)):
-            if x and x + img.width + GUTTER > base.width:
+        for i, img in enumerate(rep.images):
+            if x and x + img.width + GUTTER > width:
                 shelves.append(shelf); shelf = []; x = 0
             shelf.append((rep, i, img))
             x += img.width + GUTTER
-            row_h = max(row_h, img.height)
     if shelf:
         shelves.append(shelf)
 
     added = sum(max(img.height for _, _, img in s) + GUTTER for s in shelves)
-    canvas = Image.new("RGBA", (base.width, base.height + added), (0, 0, 0, 0))
+    height = base.height + added
+    if height > MAX_SIDE or width > MAX_SIDE:
+        raise ValueError(
+            f"atlas would be {width}x{height}, past WebP's {MAX_SIDE}px limit. "
+            "Fewer frames, smaller sheets, or a second atlas."
+        )
+    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     canvas.paste(base, (0, 0))
 
     placed: dict[tuple[str, str], list[list[int]]] = {}

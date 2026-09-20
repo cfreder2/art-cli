@@ -30,6 +30,7 @@ from art import seams as seams_mod
 from art import pack as pack_mod
 from art import review as review_mod
 from art import rules as rules_mod
+from art import seamless as seamless_mod
 from art import template as tpl_mod
 from art.prompt import build as build_prompt
 from art import cut as cut_mod
@@ -498,6 +499,11 @@ def _check_subject(prof, name, subject):
         rgb = np.asarray(Image.open(path).convert("RGB"))
         alpha, rows = cut_mod.detect(rgb, key, expect=sh.cols,
                                      anchor=subject.raw.get("anchor", "centroid"))
+        # Check the KEYED art, not the plate. Every anti-aliased edge on a raw
+        # sheet is a blend of the drawing and the backdrop, so measuring the
+        # plate says every outline is at risk -- including a navy one two
+        # hundred units away from the key once the spill is pulled back.
+        rgb = cut_mod.keyed(rgb, key)[..., :3]
         retired = set(subject.raw.get("retired") or [])
 
         if sh.wrapped:
@@ -519,15 +525,20 @@ def _check_subject(prof, name, subject):
             checked += 1
             where = f"{name}/{anim}"
             _, minimum = subject.min_size(prof.tile_px)
-            findings += rules_mod.undersized(boxes, subject.kind, minimum,
-                                             prof.tile_px, where)
+            findings += rules_mod.undersized(
+                boxes, subject.kind, minimum, prof.tile_px, where,
+                square=bool(subject.raw.get("square", True)))
             findings += rules_mod.merged_frames(len(boxes), expected.get(anim), where)
             findings += rules_mod.baseline_spread(boxes, where)
             for i, b in enumerate(boxes):
                 sub_rgb = rgb[b.y:b.y + b.h, b.x:b.x + b.w]
                 sub_a = alpha[b.y:b.y + b.h, b.x:b.x + b.w]
                 findings += rules_mod.halo(sub_rgb, sub_a, key, f"{where}[{i}]")
-                findings += rules_mod.outline(sub_rgb, sub_a, f"{where}[{i}]")
+                # A tile must NOT have an outline -- one becomes a grid line
+                # ruled across the world every time it repeats -- so checking
+                # for one is backwards.
+                if subject.kind != "tile":
+                    findings += rules_mod.outline(sub_rgb, sub_a, key, f"{where}[{i}]")
                 if subject.kind == "tile":
                     findings += rules_mod.tile_margin(sub_a, f"{where}[{i}]")
 
@@ -612,15 +623,29 @@ def _check_seams(ctx, prof, chosen) -> None:
     table.add_column("h-wrap", justify="right"); table.add_column("v-wrap", justify="right")
     table.add_column("verdict")
 
+    wanted = []
     for name, subject in chosen.items():
-        if not subject.raw.get("seamless"):
+        if not subject.raw.get("seamless") or subject.state == "retired":
             continue
         source = subject.raw.get("source") or {}
         group = groups.get(source.get("group", name))
-        entry = source.get("entry")
-        if not group or (entry and entry not in group.anims):
+        if not group:
             continue
-        frame = group.anims[entry or next(iter(group.anims))].frames[0]
+        entry = source.get("entry")
+        if entry:
+            keys = [entry] if entry in group.anims else []
+        elif subject.sheets:
+            # A grouped tile subject: every entry on its sheets tiles, so every
+            # entry is checked, not whichever happened to be first.
+            keys = [a for sh in subject.sheets.values()
+                    for a in (sh.get("anims") if isinstance(sh, dict) else sh)
+                    if a in group.anims]
+        else:
+            keys = [k for k in group.anims if k == name]
+        wanted += [(k, subject, group) for k in keys]
+
+    for name, subject, group in wanted:
+        frame = group.anims[name].frames[0]
         crop = px[frame.y:frame.y + frame.h, frame.x:frame.x + frame.w]
         if crop.size == 0:
             continue
@@ -1407,7 +1432,7 @@ def pack(ctx, fmt, quality, dry_run) -> None:
                 continue
             keyed, rows = pack_mod.cut_sheet(
                 sheet_file, backdrop_for(prof, subject), sh.anims,
-                sh.cols, sh.wrapped)
+                sh.cols, sh.wrapped, gallery=sh.gallery)
             cut_sheets.append((name, subject, sh, keyed, rows))
 
     # Frame 0 of each character's reference row, after redrawing.
@@ -1437,6 +1462,19 @@ def pack(ctx, fmt, quality, dry_run) -> None:
             atlas_key = f"{prefix}{anim}"
             old = (existing.get(group) or {}).get(atlas_key) or []
             images = [keyed.crop((b.x, b.y, b.x + b.w, b.y + b.h)) for b in boxes]
+
+            # A generator cannot draw a seamless tile from a description -- the
+            # ground family came back at 13x, 10x and 6x the tile's own step
+            # across the wrap. It is an image-processing problem, so it is done
+            # here rather than asked for again.
+            axis = subject.raw.get("seamless")
+            if axis and subject.kind == "tile":
+                import numpy as np
+                from PIL import Image as _Image
+                images = [_Image.fromarray(
+                    seamless_mod.make_seamless(np.asarray(im.convert("RGBA")),
+                                               axis if isinstance(axis, str) else "both"))
+                    for im in images]
 
             # The reference row needs no correction at all: the base scale is
             # derived from its own frame 0, so it moves with it.

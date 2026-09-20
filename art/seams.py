@@ -31,12 +31,12 @@ class SeamScore:
 
     @property
     def seamless(self) -> bool:
-        return self.ratio <= SEAMLESS_RATIO
+        return self.ratio <= SEAMLESS_RATIO or self.wrap_diff < SEAMLESS_LEVELS
 
     def verdict(self) -> str:
-        if self.ratio <= SEAMLESS_RATIO:
+        if self.seamless:
             return "seamless"
-        if self.ratio <= SEAMLESS_RATIO * 2:
+        if self.ratio <= SEAMLESS_RATIO * 2 and self.wrap_diff < SEAMLESS_LEVELS * 2:
             return "soft seam"
         return "SEAM"
 
@@ -45,6 +45,13 @@ class SeamScore:
 # art varies, so this is deliberately loose: it is meant to catch a line, not
 # to enforce a tiling pattern.
 SEAMLESS_RATIO = 2.0
+
+# ...and below this many levels out of 255 the step cannot be seen whatever the
+# ratio says. A very smooth tile -- still water, open sky -- has an internal
+# step near zero, so dividing by it turns an invisible two-level difference
+# into a large number. Water measured 2.3 levels at a 2.2x ratio while a noisy
+# dirt measured 10 levels at 2.5x; only one of those is a line on screen.
+SEAMLESS_LEVELS = 4.0
 
 
 def _edge_scores(a: np.ndarray) -> tuple[float, float]:
