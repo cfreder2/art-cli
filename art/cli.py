@@ -28,6 +28,7 @@ from art import draw as draw_mod
 from art import effects as fx_mod
 from art import seams as seams_mod
 from art import pack as pack_mod
+from art import rules as rules_mod
 from art import template as tpl_mod
 from art.prompt import build as build_prompt
 from art import cut as cut_mod
@@ -413,6 +414,89 @@ def plan(ctx, names, everything, budget, tight) -> None:
 
 # --------------------------------------------------------------- check --
 
+def _sheet_for(prof, name):
+    """Resolve `frog-1` or `frog` to (subject, sheet plan, whole plan)."""
+    for sub_name, subject in prof.subjects.items():
+        pl = plan_subject(prof, subject, _groups_or_empty(prof))
+        for sh in pl.sheets:
+            if sh.name == name or (sub_name == name and len(pl.sheets) == 1):
+                return subject, sh, pl
+    raise click.ClickException(
+        f"No sheet named {name!r}. `art plan --all` lists them.")
+
+
+def _groups_or_empty(prof):
+    try:
+        return read_legacy(_atlas_path(prof))
+    except click.ClickException:
+        return {}
+
+
+def _check_subject(prof, name, subject):
+    """Run every rule over one subject's accepted sheet."""
+    import numpy as np
+    from PIL import Image
+
+    findings = []
+    accepted = subject.raw.get("accepted") or {}
+    if not accepted:
+        return findings, 0
+
+    checked = 0
+    for sheet_name, rec in accepted.items():
+        path = prof.root / rec.get("file", "")
+        if not path.is_file():
+            findings.append(rules_mod.Finding("missing", sheet_name,
+                                              f"{rec.get('file')} is gone"))
+            continue
+        pl = plan_subject(prof, subject, _groups_or_empty(prof))
+        sh = next((x for x in pl.sheets if x.name == sheet_name), None)
+        if sh is None:
+            continue
+
+        key = cut_mod.hex_to_rgb(backdrop_for(prof, subject))
+        rgb = np.asarray(Image.open(path).convert("RGB"))
+        alpha, rows = cut_mod.detect(rgb, key, expect=sh.cols,
+                                     anchor=subject.raw.get("anchor", "centroid"))
+        retired = set(subject.raw.get("retired") or [])
+
+        if sh.wrapped:
+            groups = {sh.anims[0]: [b for r in rows for b in r.boxes]}
+            expected = {sh.anims[0]: sh.wrapped}
+        else:
+            groups = {sh.anims[i]: r.boxes for i, r in enumerate(rows)
+                      if i < len(sh.anims)}
+            expected = {a: sh.cols for a in sh.anims}
+
+        # A violation someone accepted on purpose, with the reason written
+        # down, should not fail the build every time afterwards. It is still
+        # reported -- as a warning, so it stays visible.
+        waived = set(rec.get("accepted_despite") or [])
+
+        for anim, boxes in groups.items():
+            if anim in retired or not boxes:
+                continue
+            checked += 1
+            where = f"{name}/{anim}"
+            _, minimum = subject.min_size(prof.tile_px)
+            findings += rules_mod.undersized(boxes, subject.kind, minimum,
+                                             prof.tile_px, where)
+            findings += rules_mod.merged_frames(len(boxes), expected.get(anim), where)
+            findings += rules_mod.baseline_spread(boxes, where)
+            for i, b in enumerate(boxes):
+                sub_rgb = rgb[b.y:b.y + b.h, b.x:b.x + b.w]
+                sub_a = alpha[b.y:b.y + b.h, b.x:b.x + b.w]
+                findings += rules_mod.halo(sub_rgb, sub_a, key, f"{where}[{i}]")
+                findings += rules_mod.outline(sub_rgb, sub_a, f"{where}[{i}]")
+                if subject.kind == "tile":
+                    findings += rules_mod.tile_margin(sub_a, f"{where}[{i}]")
+
+        for f in findings:
+            if f.fatal and f"{f.rule}: {f.detail}" in waived:
+                f.fatal = False
+    return findings, checked
+
+
 @main.command()
 @click.argument("names", nargs=-1)
 @click.option("--all", "everything", is_flag=True, help="Every subject.")
@@ -420,36 +504,75 @@ def plan(ctx, names, everything, budget, tight) -> None:
               help="Only the tiling check: does each seamless tile repeat without a line?")
 @click.pass_context
 def check(ctx, names, everything, seams_only) -> None:
-    """Verify art against the rules. Nonzero exit on a violation.
+    """Verify accepted art against every rule. Nonzero exit on a violation.
 
     Strict about `accepted` subjects and quiet about `legacy` ones, so a build
     can stay green through a migration that takes weeks. `audit` ignores that
     distinction and always reports the truth.
     """
+    prof = _load(ctx.obj["project"])
+    wanted = set(names)
+    chosen = {n: s for n, s in prof.subjects.items()
+              if everything or not wanted or n in wanted}
+
+    if seams_only:
+        _check_seams(ctx, prof, chosen)
+        return
+
+    all_findings, checked, subjects = [], 0, 0
+    for name, subject in chosen.items():
+        if subject.state != "accepted":
+            continue
+        subjects += 1
+        found, n = _check_subject(prof, name, subject)
+        all_findings += found
+        checked += n
+
+    if not subjects:
+        console.print("[yellow]Nothing accepted to check.[/yellow] "
+                      "[dim]`check` holds accepted art to the rules; "
+                      "`audit` reports on everything.[/dim]")
+        return
+
+    fatal = [f for f in all_findings if f.fatal]
+    if all_findings:
+        table = Table(header_style="bold", title="Findings")
+        table.add_column("rule"); table.add_column("where"); table.add_column("detail")
+        for f in sorted(all_findings, key=lambda f: (not f.fatal, f.rule)):
+            style = "red" if f.fatal else "yellow"
+            table.add_row(f"[{style}]{f.rule}[/{style}]", f.where, f.detail)
+        console.print(table)
+
+    console.print(f"[dim]{subjects} accepted subject(s), {checked} animation(s) "
+                  f"checked[/dim]")
+    if fatal:
+        console.print(f"[bold red]{len(fatal)} violation(s).[/bold red]")
+        raise SystemExit(1)
+    warn = len(all_findings)
+    console.print("[green]clean[/green]" + (f" [dim]({warn} warning(s))[/dim]" if warn else ""))
+
+
+def _check_seams(ctx, prof, chosen) -> None:
+    """The tiling check, kept separate: it needs the packed atlas, not a sheet."""
     import numpy as np
     from PIL import Image
 
-    prof = _load(ctx.obj["project"])
     atlas_json = _atlas_path(prof)
     groups = read_legacy(atlas_json)
-    image_path = atlas_json.parent / (__import__("json").loads(atlas_json.read_text()).get("image") or "atlas.png")
+    image_path = atlas_json.parent / (__import__("json").loads(
+        atlas_json.read_text()).get("image") or "atlas.png")
     if not image_path.is_file():
         raise click.ClickException(f"Atlas image not found: {image_path}")
-    sheet = Image.open(image_path).convert("RGBA")
-    px = np.asarray(sheet)
+    px = np.asarray(Image.open(image_path).convert("RGBA"))
 
-    wanted = set(names)
-    failures = 0
+    failures, checked = 0, 0
     table = Table(title="Seams", header_style="bold")
     table.add_column("tile"); table.add_column("size", justify="right")
     table.add_column("margin", justify="right")
     table.add_column("h-wrap", justify="right"); table.add_column("v-wrap", justify="right")
     table.add_column("verdict")
-    checked = 0
 
-    for name, subject in prof.subjects.items():
-        if not everything and wanted and name not in wanted:
-            continue
+    for name, subject in chosen.items():
         if not subject.raw.get("seamless"):
             continue
         source = subject.raw.get("source") or {}
@@ -482,8 +605,7 @@ def check(ctx, names, everything, seams_only) -> None:
         )
 
     if not checked:
-        console.print("[yellow]No subjects marked `seamless: true`.[/yellow] "
-                      "[dim]Terrain that tiles needs it; decor does not.[/dim]")
+        console.print("[yellow]No subjects marked `seamless: true`.[/yellow]")
         return
     console.print(table)
     console.print("[dim]h-wrap/v-wrap: the step across the wrap over the tile's own "
@@ -491,62 +613,6 @@ def check(ctx, names, everything, seams_only) -> None:
     if failures:
         console.print(f"[bold red]{failures} accepted tile(s) failed.[/bold red]")
         raise SystemExit(1)
-
-
-def _sheet_for(prof, name):
-    """Resolve `frog-1` or `frog` to (subject, sheet plan, whole plan)."""
-    for sub_name, subject in prof.subjects.items():
-        pl = plan_subject(prof, subject, _groups_or_empty(prof))
-        for sh in pl.sheets:
-            if sh.name == name or (sub_name == name and len(pl.sheets) == 1):
-                return subject, sh, pl
-    raise click.ClickException(
-        f"No sheet named {name!r}. `art plan --all` lists them.")
-
-
-def _issue_note(subject, sheet) -> str:
-    """Flagged frames, phrased as instructions for the next generation."""
-    rows = set(sheet.anims)
-    items = [i for i in (subject.raw.get("issues") or []) if i["anim"] in rows]
-    if not items:
-        return ""
-    parts = []
-    for i in items:
-        where = f"in the {i['anim']} row, frame {i['frame']} (counting from 0)"
-        parts.append(f"{where}: {i['note']}" if i.get("note")
-                     else f"{where} needs redrawing")
-    return ("Fix these specifically and keep everything else identical -- "
-            + "; ".join(parts) + ".")
-
-
-def _backdrop_warning(prof, subject) -> str:
-    """Whether this subject's backdrop would be keyed out of the character."""
-    ref = next((r for r in resolve_refs(prof, subject) if r.role == "identity"), None)
-    if ref is None:
-        return ""
-    try:
-        import numpy as np
-        from PIL import Image
-        a = np.asarray(Image.open(ref.path).convert("RGB"))
-    except Exception:
-        return ""
-    art = ~((a > 235).all(axis=-1))
-    key = backdrop_for(prof, subject)
-    bad = cut_mod.spill_conflict(a, cut_mod.hex_to_rgb(key), art)
-    if bad <= 0.30:
-        return ""
-    ranked = cut_mod.best_backdrop(a, art)
-    safe = ", ".join(f"{n} ({v})" for n, v, score in ranked[:2] if score <= 0.10)
-    return (f"{key} would despill {bad * 100:.0f}% of this character's own pixels "
-            f"-- its dominant channel is the character's too."
-            + (f" Try {safe}." if safe else ""))
-
-
-def _groups_or_empty(prof):
-    try:
-        return read_legacy(_atlas_path(prof))
-    except click.ClickException:
-        return {}
 
 
 # -------------------------------------------------------------- prompt --
@@ -1155,8 +1221,11 @@ def template(ctx, sheet, anchor) -> None:
 @click.argument("sheet")
 @click.argument("candidate", type=int, required=False)
 @click.option("--note", default="", help="Why this one. Kept in art.yaml.")
+@click.option("--force", is_flag=True,
+              help="Accept despite violations. Recorded in art.yaml, so the "
+                   "next person can see it was a decision.")
 @click.pass_context
-def accept(ctx, sheet, candidate, note) -> None:
+def accept(ctx, sheet, candidate, note, force) -> None:
     """Keep a candidate as the sheet for real.
 
     A generator produces variations and picking one is a judgement; this
@@ -1169,7 +1238,14 @@ def accept(ctx, sheet, candidate, note) -> None:
 
     prof = _load(ctx.obj["project"])
     subject, sh, pl = _sheet_for(prof, sheet)
-    pool = sorted((prof.root / "art" / "candidates").glob(f"{sh.name}-*.png"))
+    # Archived candidates count. A rejected sheet is often the best `pose`
+    # reference for the next attempt, and re-accepting an earlier one after a
+    # later attempt went wrong is exactly why they are kept.
+    hunt = [prof.root / "art" / "candidates",
+            prof.root / "art" / "archive" / "candidates"]
+    pool = sorted((f for d in hunt if d.is_dir()
+                   for f in d.glob(f"{sh.name}-*.png")),
+                  key=lambda f: int(f.stem.rsplit("-", 1)[1]))
     if not pool:
         raise click.ClickException(f"No candidates for {sh.name}. Run `art draw {sh.name}`.")
 
@@ -1177,9 +1253,10 @@ def accept(ctx, sheet, candidate, note) -> None:
         chosen = pool[-1]
         candidate = int(chosen.stem.rsplit("-", 1)[1])
     else:
-        chosen = prof.root / "art" / "candidates" / f"{sh.name}-{candidate}.png"
-        if not chosen.is_file():
-            have = ", ".join(c.stem.rsplit("-", 1)[1] for c in pool)
+        chosen = next((f for f in pool
+                       if int(f.stem.rsplit("-", 1)[1]) == candidate), None)
+        if chosen is None:
+            have = ", ".join(f.stem.rsplit("-", 1)[1] for f in pool)
             raise click.ClickException(
                 f"No candidate {candidate} for {sh.name}. Have: {have}.")
 
@@ -1187,6 +1264,10 @@ def accept(ctx, sheet, candidate, note) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(chosen, dest)
 
+    # Check BEFORE recording it, so a sheet that breaks a rule cannot be
+    # packed without someone having seen the reason. Everything found in this
+    # project so far was found by a person squinting at a 1254px sheet, which
+    # does not survive 68 subjects.
     accepted = dict(subject.raw.get("accepted") or {})
     accepted[sh.name] = {
         "candidate": candidate,
@@ -1194,7 +1275,27 @@ def accept(ctx, sheet, candidate, note) -> None:
         **({"note": note} if note else {}),
     }
     subject.raw["accepted"] = accepted
-    subject.state = "accepted"
+    was_state, subject.state = subject.state, "accepted"
+
+    findings, _ = _check_subject(prof, subject.name, subject)
+    fatal = [f for f in findings if f.fatal and f.where.startswith(f"{subject.name}/")]
+    if fatal and not force:
+        subject.raw["accepted"] = ({k: v for k, v in accepted.items()
+                                    if k != sh.name} or None)
+        if subject.raw["accepted"] is None:
+            del subject.raw["accepted"]
+        subject.state = was_state
+        dest.unlink(missing_ok=True)
+        for f in fatal:
+            console.print(f"  [red]{f.rule}[/red] {f.where}: {f.detail}")
+        raise click.ClickException(
+            f"{len(fatal)} violation(s) — not accepted. Fix the sheet, or "
+            "`--force` if it is the best that can be had.")
+    if fatal:
+        accepted[sh.name]["accepted_despite"] = [
+            f"{f.rule}: {f.detail}" for f in fatal]
+        console.print(f"[yellow]forced past {len(fatal)} violation(s)[/yellow]"
+                      " [dim]— recorded in art.yaml[/dim]")
     profile_mod.save(prof)
 
     console.print(f"[green]accepted[/green] {sh.name} candidate {candidate} "
@@ -1206,9 +1307,14 @@ def accept(ctx, sheet, candidate, note) -> None:
 # ---------------------------------------------------------------- pack --
 
 @main.command()
+@click.option("--format", "fmt", type=click.Choice(["webp", "png"]),
+              default="webp", show_default=True,
+              help="WebP is 4-6x smaller than PNG for painterly art and the "
+                   "game hands the file to drawImage, which does not care.")
+@click.option("--quality", default=90, show_default=True, help="WebP quality.")
 @click.option("--dry-run", is_flag=True, help="Report what would change; write nothing.")
 @click.pass_context
-def pack(ctx, dry_run) -> None:
+def pack(ctx, fmt, quality, dry_run) -> None:
     """Merge every accepted sheet into the atlas the game loads.
 
     The existing atlas is kept whole and the new frames are appended below it,
@@ -1260,10 +1366,24 @@ def pack(ctx, dry_run) -> None:
                 atlas_key = f"{prefix}{anim}"
                 old = (existing.get(group) or {}).get(atlas_key) or []
                 images = [keyed.crop((b.x, b.y, b.x + b.w, b.y + b.h)) for b in boxes]
+                # Effects are metadata, so they travel with the animation
+                # rather than being reimplemented in each game.
+                try:
+                    normalised = fx_mod.normalise(subject.raw.get("effects") or {})
+                except fx_mod.EffectError as exc:
+                    raise click.ClickException(f"{name} effects: {exc}") from exc
+                effects = fx_mod.for_anim(normalised, anim)
+                meta = {k: v for k, v in (
+                    ("frames", len(boxes)),
+                    ("effects", {n: {k: v for k, v in vals.items()
+                                     if k != "anchor"}
+                                 for n, vals in effects.items()} or None),
+                ) if v}
+
                 replacements.append(pack_mod.Replacement(
                     group=group, anim=atlas_key, frames=boxes, images=images,
                     scale=pack_mod.scale_for(boxes, old, ref_old, ref_new),
-                    old_frames=len(old)))
+                    old_frames=len(old), meta=meta))
 
     if not replacements:
         raise click.ClickException("Nothing accepted to pack. Run `art accept` first.")
@@ -1283,10 +1403,93 @@ def pack(ctx, dry_run) -> None:
     if dry_run:
         return
 
+    out_img = atlas_png.with_suffix(f".{fmt}")
+    before = atlas_png.stat().st_size
     result = pack_mod.merge(atlas_png, atlas_json, replacements,
-                            atlas_png, atlas_json)
+                            out_img, atlas_json, quality=quality)
+    after = out_img.stat().st_size
     console.print(f"[green]packed[/green] {result.image.name} "
                   f"[dim]{result.width}×{result.height}, "
                   f"+{result.added_px}px of new art[/dim]")
-    console.print("[dim]the game needs the anchor and the scales map — "
-                  "see DESIGN.md.[/dim]")
+    console.print(f"[dim]{before / 1e6:.1f}MB → [/dim]"
+                  f"[bold]{after / 1e6:.1f}MB[/bold]"
+                  + (f" [dim]({before / after:.1f}× smaller)[/dim]"
+                     if after < before else ""))
+    if out_img.suffix != atlas_png.suffix and atlas_png.exists():
+        console.print(f"[dim]{atlas_png.name} is now unused — "
+                      f"atlas.json points at {out_img.name}.[/dim]")
+
+
+# ----------------------------------------------------------------- cut --
+
+@main.command()
+@click.argument("sheet")
+@click.option("--from", "source", type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              default=None, help="A sheet to cut. Defaults to the accepted one.")
+@click.option("--out", "out_dir", type=click.Path(file_okay=False, path_type=Path),
+              default=None, help="Where the frames go. Defaults to art/frames/<sheet>/.")
+@click.pass_context
+def cut(ctx, sheet, source, out_dir) -> None:
+    """Key a sheet and write its frames out one file each.
+
+    `view` and `pack` cut in memory; this is for looking at a frame, handing one
+    to another tool, or checking what the detector actually found.
+    """
+    import numpy as np
+    from PIL import Image
+
+    prof = _load(ctx.obj["project"])
+    subject, sh, pl = _sheet_for(prof, sheet)
+    if source is None:
+        rec = (subject.raw.get("accepted") or {}).get(sh.name) or {}
+        source = prof.root / rec.get("file", "")
+        if not source.is_file():
+            raise click.ClickException(
+                f"No accepted sheet for {sh.name}. Pass --from, or `art accept`.")
+
+    key = cut_mod.hex_to_rgb(backdrop_for(prof, subject))
+    rgb = np.asarray(Image.open(source).convert("RGB"))
+    _, rows = cut_mod.detect(rgb, key, expect=sh.cols,
+                             anchor=subject.raw.get("anchor", "centroid"))
+    keyed = Image.fromarray(cut_mod.keyed(rgb, key))
+    out_dir = out_dir or (prof.root / "art" / "frames" / sh.name)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    boxes = ([b for r in rows for b in r.boxes] if sh.wrapped
+             else [b for r in rows for b in r.boxes])
+    names = ([sh.anims[0]] * len(boxes) if sh.wrapped
+             else [sh.anims[i] if i < len(sh.anims) else f"row{i+1}"
+                   for i, r in enumerate(rows) for _ in r.boxes])
+    n = 0
+    counts: dict[str, int] = {}
+    for name, b in zip(names, boxes):
+        i = counts.get(name, 0); counts[name] = i + 1
+        keyed.crop((b.x, b.y, b.x + b.w, b.y + b.h)).save(out_dir / f"{name}-{i}.png")
+        n += 1
+    console.print(f"[green]cut[/green] {n} frames → {out_dir}"
+                  f"  [dim]{', '.join(f'{k}×{v}' for k, v in counts.items())}[/dim]")
+
+
+# ------------------------------------------------------------- runtime --
+
+@main.command()
+@click.option("--emit", "dest", type=click.Path(dir_okay=False, path_type=Path),
+              default=None, help="Where to write it. Defaults to web/sprite.js.")
+@click.pass_context
+def runtime(ctx, dest) -> None:
+    """Write the reader for the format this tool writes.
+
+    Vended rather than published, so the generator and its reader cannot drift
+    and each game keeps a copy it is free to edit.
+    """
+    import shutil
+    from importlib.resources import files
+
+    prof = _load(ctx.obj["project"])
+    dest = dest or (prof.root / "web" / "sprite.js")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(str(files("art").joinpath("runtime.js")), dest)
+    console.print(f"[green]wrote[/green] {dest.relative_to(prof.root)} "
+                  f"[dim]{dest.stat().st_size // 1024}KB[/dim]")
+    console.print("[dim]it applies scales, anchor, lift and effects — "
+                  "the four things a naive reader gets wrong.[/dim]")

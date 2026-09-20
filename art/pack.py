@@ -43,6 +43,7 @@ class Replacement:
     images: list[Image.Image]
     scale: float = 1.0
     old_frames: int = 0
+    meta: dict = field(default_factory=dict)   # fps, loop, effects
 
 
 @dataclass
@@ -100,7 +101,7 @@ def scale_for(new_boxes: list[cut_mod.Box], old: list[list[int]],
 
 
 def merge(atlas_png: Path, atlas_json: Path, replacements: list[Replacement],
-          out_png: Path, out_json: Path) -> PackResult:
+          out_png: Path, out_json: Path, quality: int = 90) -> PackResult:
     """Append the new frames below the existing atlas and repoint the rows."""
     base = Image.open(atlas_png).convert("RGBA")
     data = json.loads(atlas_json.read_text())
@@ -138,14 +139,26 @@ def merge(atlas_png: Path, atlas_json: Path, replacements: list[Replacement],
         data.setdefault(rep.group, {})[rep.anim] = placed[(rep.group, rep.anim)]
 
     scales = dict(data.get("scales") or {})
+    anims = dict(data.get("anims") or {})
     for rep in replacements:
-        scales[f"{rep.group}/{rep.anim}"] = rep.scale
+        key = f"{rep.group}/{rep.anim}"
+        scales[key] = rep.scale
+        if rep.meta:
+            anims[key] = rep.meta
     data["scales"] = scales
+    if anims:
+        data["anims"] = anims
     data["image"] = out_png.name
     data["w"], data["h"] = canvas.width, canvas.height
 
     out_png.parent.mkdir(parents=True, exist_ok=True)
-    canvas.save(out_png)
+    if out_png.suffix.lower() == ".webp":
+        # Lossy WebP keeps alpha, and at q90 the difference is invisible on art
+        # this painterly while costing a fraction of PNG, which is built for
+        # flat colour.
+        canvas.save(out_png, "WEBP", quality=quality, method=6)
+    else:
+        canvas.save(out_png)
     out_json.write_text(json.dumps(data, separators=(",", ":")))
     return PackResult(out_png, out_json,
                       [f"{r.group}/{r.anim}" for r in replacements],
