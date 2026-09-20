@@ -128,7 +128,7 @@ PAGE = """<!DOCTYPE html>
 <script>
 const DATA = __DATA__;
 let device = DATA.devices.find(d => d.px === 192) || DATA.devices[0];
-let fps = 8, showBase = false, showGrid = false, playing = true, sync = true;
+let fps = 8, showBase = false, showGrid = false, playing = true, syncSpeed = true;
 
 const images = {};
 function load(src){ return new Promise(r => { const i = new Image();
@@ -138,19 +138,19 @@ const devs = document.getElementById('devs');
 DATA.devices.forEach(d => {
   const b = document.createElement('button');
   b.textContent = d.name + ' · ' + d.px;
-  b.onclick = () => { device = d; sync(); };
+  b.onclick = () => { device = d; syncDeviceButtons(); };
   b.dataset.px = d.px; devs.appendChild(b);
 });
-function sync(){ [...devs.children].forEach(b =>
+function syncDeviceButtons(){ [...devs.children].forEach(b =>
   b.setAttribute('aria-pressed', String(+b.dataset.px === device.px))); }
-sync();
+syncDeviceButtons();
 
 document.getElementById('fps').oninput = e => {
   fps = +e.target.value; document.getElementById('fpsv').textContent = fps + ' fps'; };
 const toggle = (id, set) => { const b = document.getElementById(id);
   b.onclick = () => { const v = b.getAttribute('aria-pressed') !== 'true';
     b.setAttribute('aria-pressed', String(v)); set(v); }; };
-toggle('sync', v => sync = v);
+toggle('sync', v => syncSpeed = v);
 toggle('base', v => showBase = v);
 toggle('grid', v => showGrid = v);
 document.getElementById('play').onclick = () => { playing = !playing;
@@ -519,7 +519,7 @@ function tick(now){
       // however many frames it is drawn in. Off: each version advances a frame
       // per tick, which is what a game with a fixed fps would do.
       const base = r.variants[0].frames.length;
-      const cyclesPerSec = fps / (sync ? base : r.ui.n);
+      const cyclesPerSec = fps / (syncSpeed ? base : r.ui.n);
       r.ui.phase = (r.ui.phase + (dt / 1000) * cyclesPerSec) % 1;
       r.ui.scrub.value = Math.floor(r.ui.phase * r.ui.n);
     }

@@ -1169,3 +1169,18 @@ Speed then splits into two honest questions, so there is a **Sync speed** toggle
 
 Flags and hand edits resolve against the version being worked on, not the row,
 since a frame number only means something inside one version.
+
+## The preview page is code, so it is parsed before it ships
+
+A syntax error anywhere in a `<script>` block kills the **whole** block. The
+symptom is a page that renders its static HTML and nothing else: the title, the
+toolbar and the buttons all present, and no device buttons, no rows, no
+animations — and no error unless someone opens a console.
+
+That happened, to a `let syncSpeed` that was first written as `let sync` beside
+an existing `function sync()`. Two correct-looking edits, one dead page.
+
+So the page's script is extracted and run through `node --check` in the tests,
+skipped when node is not installed, plus a check that nothing is declared twice
+at the top level. Shipping a page that renders blank is worse than shipping one
+that is ugly, because blank looks like the tool is broken rather than the page.
