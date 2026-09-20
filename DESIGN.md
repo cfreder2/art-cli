@@ -18,18 +18,26 @@ without anyone measuring anything by hand.
 
 ```
 art init                      write art.yaml for this project
+art status                    the board: every subject, its state, what is stale
 
-art audit [subject…]          measure what exists against the spec
-art plan   <subject>          what to ask the generator for
-art prompt <subject>          the prompt text, the rules baked in
-art draw   <subject>          generate the sheet
-art cut    <subject>          key, unspill, split into frames
-art check  <subject>          verify the rules; nonzero exit on a violation
+art audit  [selector]         measure what exists against the spec
+art plan   [selector]         what to ask the generator for
+art prompt [selector]         the prompt text, the rules baked in
+art draw   [selector]         generate candidates for a sheet
+art accept <sheet> [n]        keep candidate n as the sheet
+art cut    [selector]         key, unspill, split into frames
+art check  [selector]         verify the rules; nonzero exit on a violation
 art pack                      atlas.webp + atlas.json
+art view   [selector]         preview in the browser (also bare `art`)
+art runtime                   emit the reader for the format it writes
 
 art concept new <description> exploratory art — not measured, not cut, not packed
 art concept list
 ```
+
+A **selector** is `<name>… | --all | --stale | --tag <t>`, on every stage. That
+is not a convenience: fixing AXI is nineteen sheets, and a surface that only
+addresses one at a time is a surface you drive with a shell loop.
 
 Flat, because the pipeline *is* the mental model: each verb is one stage, and
 you run them left to right. `DnD-CLI` moved away from a flat surface, but it had
@@ -179,11 +187,21 @@ decoded it.
   near x=60 are placement bugs in AXI's level builder, not art. The assert that
   catches them — every standing prop's footprint touches the ground under it —
   belongs in `build_1-*.py`, where the level data is.
-- **Running in AXI's CI.** `web/atlas.png` and `web/atlas.json` are committed,
-  and the Pages workflow only runs `build_web.py`. So `art` is a tool a person
-  runs, and the atlas stays committed. AXI's build keeps its dependency-free
-  property; this tool is free to use Pillow, numpy and click the way `DnD-CLI`
-  does.
+- **Running in AXI's CI.** `build_web.py:28` calls `pack_atlas.py`, so the atlas
+  is rebuilt on every deploy — which is why `tools/_png.py` is a hand-written
+  PNG writer: GitHub Actions installs nothing, and the whole toolchain is
+  stdlib on purpose. `art` cannot take that slot without adding a `pip install`
+  of a **private** repo to CI, with the token that implies.
+
+  So `art` is run by a person, `web/atlas.webp` and `web/atlas.json` are
+  committed as the real artifacts, and `build_web.py` stops calling the packer.
+  AXI keeps its dependency-free build; this tool stays free to use Pillow,
+  numpy and click the way `DnD-CLI` does. That is a one-line deletion in
+  `build_web.py` and it is a prerequisite, not a side effect.
+
+- **Editing the game.** `art` writes the atlas and vends the reader. Rewriting
+  `Sprites` in `game.js` to use them is hand work in AXI, and should be — a
+  tool that edits its consumer's source is a tool you cannot trust.
 
 ---
 
@@ -312,3 +330,87 @@ Open, and passed through untouched:
 
 The version field is what makes this safe: a runtime that reads `format: 1` can
 refuse `format: 2` loudly instead of drawing garbage.
+
+---
+
+# Fixing AXI, in the verbs
+
+This is the design's test. If the surface cannot express this job, the surface
+is wrong.
+
+## The size of the job, measured
+
+447 frames ship today across 6 sheets. At one character per sheet and a 2048²
+canvas, the same content wants about **nineteen**:
+
+| | today | frames | sheets at 2048² |
+| --- | --- | --- | --- |
+| Masie | 1 shared sheet | 47 in 9 anims | **3** (6×4, 4 anims of 6) |
+| Mudbug, Glowgrub, Dragonfly, Nibbler | 1 shared sheet | 27 | **4** — one each |
+| Mr Frog | ⅓ of a shared sheet | 36 in 6 anims | **2** |
+| Sir Croaks | 1 sheet (already right) | 32 in 8 anims | **4** (3×3) |
+| terrain + decor | 2 tilesets | 305 in 61 entries | **~6** (8×8 grid, 3×2 decor) |
+
+Nineteen generations is the real cost of this, and no tool removes it. What the
+tool removes is everything around it.
+
+## The sequence
+
+```sh
+cd axi
+
+art init                 # art.yaml from the sheets and atlas already here
+art audit                # §2's table: what is undersized, per device
+art status               # nineteen sheets, all `todo`
+
+art plan masie-move      # 2048², 6×4, 341×512 cells, 240 px minimum
+art prompt masie-move    # the prompt, §7's rules as Constraints
+art draw masie-move      # → candidates, or skip and use --from
+art view masie-move      # at 83 / 131 / 192 / 320 px per tile, against the old
+art accept masie-move 2  # keep candidate 2
+art cut masie-move       # magenta key, soft ramp, unspill, split, measure
+art check masie-move     # the seven rules; nonzero if it broke one
+
+art status               # 1 of 19 done — repeat 18 times
+
+art pack                 # atlas.webp + atlas.json
+art runtime --emit web/sprite.js
+```
+
+Then, by hand in AXI, because a tool should not edit its consumer:
+
+- `Sprites` in `game.js` reads `sprite.js` instead of indexing raw arrays, and
+  drops the hardcoded `1.15 / atlas.axi.idle[0][3]` scale constants;
+- `game.js:2865` loads `atlas.webp`;
+- `build_web.py:28` stops calling `pack_atlas.py`;
+- `pack_atlas.py` and `build_atlas.py` are deleted, their algorithms having moved.
+
+## The part the first draft got wrong: this is not one change
+
+Nineteen sheets cannot land at once, so **the atlas has to hold old and new art
+at the same time** — Masie at 240 px beside a 45 px Mr Frog — for as long as the
+job takes. That makes state a first-class field, not a nicety:
+
+```yaml
+subjects:
+  masie:   {state: accepted, …}   # redrawn at 192, checked, packed
+  mr-frog: {state: legacy,   …}   # still the old art; audit counts it, check spares it
+```
+
+`check --all` fails on an `accepted` subject that breaks a rule and stays quiet
+about a `legacy` one, so the build can be green throughout a migration that
+takes weeks. `audit` ignores the distinction entirely — it always reports the
+truth, which is the number that should be embarrassing until it is zero.
+
+`status` is the hub that makes nineteen tractable: what is `todo`, what is
+`drawn` and waiting on a decision, what is `accepted`, and what is `stale`
+because its sheet changed on disk after it was cut.
+
+## Where the tool genuinely does not help
+
+- It does not draw. Nineteen 2048² generations is human and generator time.
+- It does not pick. `accept` records a judgement; it cannot make one.
+- It does not rewrite `game.js`, and should not.
+- One character per sheet means **more files, not fewer** — 19 sources instead
+  of 6. That is the trade the spec already made, and the tool's job is to make
+  19 cheaper to manage than 6 are today, not to pretend they are the same.
