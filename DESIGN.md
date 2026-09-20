@@ -1521,3 +1521,51 @@ composite.
 The prompt now says which furniture belongs to the review sheet and that it is
 never a defect. Worth remembering for any agentic check that builds its own
 input: say what you added, or it will be reported back to you.
+
+---
+
+# Terrain: what the game actually draws
+
+Before asking for a single tile, the same question the frog's six rows raised,
+at scale: **which of the 61 terrain and decor entries does the game reference?**
+
+**Twenty-seven.** The other **thirty-four** appear nowhere in `game.js` —
+`reed`, `mushroom`, `bridge`, `slope`, `water`, `grass`, the whole `plank`
+family, six of the seven lily-pad variants. They are in the atlas, they are
+downloaded by every player, and nothing can ever select them.
+
+The scan is safe because every name is a literal: `grassTileAt` returns
+`'ground_flower'`, `'ground_alt'` or `'ground_grass'` by name, and the item art
+is a ternary of two strings. Nothing is assembled from fragments.
+
+They are `state: retired` now — a subject state, not just an animation one —
+so they are planned, audited, checked and packed by nothing, and kept on the
+books with the reason.
+
+## The game's sizes disagree with the spec, and the game wins
+
+`ASSET_SPEC.md` says a tree is drawn 3 tiles wide. `game.js` draws it at
+**3.6**. A cattail is 1 in the spec and **1.5** in the code. Those numbers come
+from `blitStanding(ctx, name, cx, baseY, ts * size)` at each call site, which is
+what actually reaches the screen.
+
+So `width_tiles` is read from the code, not the document. The spec is the
+intent; the call site is the fact.
+
+## Three kinds of terrain, not one
+
+`init` drafted all 61 as `kind: tile`, which is right for about ten of them.
+
+- **Stretched tiles** — `blit()` fills a cell, so they are exactly one tile and
+  must wrap on the axis they repeat: `dirt` and `ruins` both ways, the `ground`
+  family horizontally (grass on top, dirt below, never stacked), `water_col` and
+  `vine` vertically because they hang in columns.
+- **Standing props** — `blitStanding()` draws them a number of tiles **wide**
+  with the height following their own aspect: tree 3.6, shrine 3, bank 2.9,
+  burrow 2.2, cattail 1.5, pad 1.1, flower and rock 0.8.
+- **Parallax bands** — `hill` at 3.4 tiles tall and the clouds at 1.05, each
+  repeated across the sky, so they must wrap **horizontally** or the horizon
+  shows a seam every screen width.
+
+That third kind did not exist in the design. A band is sized by its height and
+tiled by its width, which is neither of the other two.

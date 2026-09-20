@@ -252,7 +252,7 @@ def audit(ctx, names, device_keys, at_tile_px, as_json) -> None:
             chosen.append(d)
         devices = tuple(chosen)
 
-    data = audit_rows(prof, groups, devices)
+    data = [r for r in audit_rows(prof, groups, devices) if r.state != "retired"]
     if names:
         wanted = set(names)
         missing = wanted - set(prof.subjects)
@@ -310,7 +310,7 @@ def status(ctx) -> None:
         by_state.setdefault(s.state, []).append(name)
     table = Table(header_style="bold")
     table.add_column("state"); table.add_column("n", justify="right"); table.add_column("subjects")
-    for st in ("todo", "drawn", "accepted", "legacy"):
+    for st in ("todo", "drawn", "accepted", "legacy", "retired"):
         got = sorted(by_state.get(st, []))
         if not got:
             continue
@@ -352,7 +352,8 @@ def plan(ctx, names, everything, budget, tight) -> None:
     if not names and not everything:
         raise click.UsageError("Name a subject, or pass --all.")
     wanted = set(names)
-    chosen = [s for n, s in prof.subjects.items() if everything or n in wanted]
+    chosen = [s for n, s in prof.subjects.items()
+              if (everything or n in wanted) and s.state != "retired"]
     missing = wanted - set(prof.subjects)
     if missing:
         raise click.ClickException(f"Unknown subject(s): {', '.join(sorted(missing))}")

@@ -23,8 +23,11 @@ from art.spec import KINDS, TARGET_TILE_PX, min_drawn_px, prop_width_px, tile_si
 FILENAME = "art.yaml"
 
 # What a subject is waiting on. `legacy` is the one that makes a migration
-# possible: `check` stays quiet about it, `audit` counts it anyway.
-STATES = ("todo", "drawn", "accepted", "legacy")
+# possible: `check` stays quiet about it, `audit` counts it anyway. `retired`
+# is a whole subject nothing draws any more -- 34 of AXI's 61 terrain entries
+# are in the atlas and referenced nowhere -- so it is planned, audited, checked
+# and packed by nothing, but kept on the books with the reason.
+STATES = ("todo", "drawn", "accepted", "legacy", "retired")
 
 
 class ProfileError(RuntimeError):
