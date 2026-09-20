@@ -43,12 +43,13 @@ SPEC_ROWS_PER_SHEET = 4
 class SheetPlan:
     name: str
     anims: list[str]
-    cols: int              # frames in the longest animation
-    rows: int              # animations on this sheet
+    cols: int              # frames per row
+    rows: int              # animation rows, unless `wrapped`
     cell_w: int
     cell_h: int
     min_drawn: int
     facings: int
+    wrapped: int = 0       # frames in ONE animation laid across the whole grid
 
     @property
     def fits(self) -> bool:
@@ -133,7 +134,23 @@ def plan_subject(
                 continue
             counts[anim_name[len(prefix):] if prefix else anim_name] = len(anim.frames)
 
-    groupings = subject.sheets or ({subject.name: list(counts)} if counts else {})
+    # A sheet entry is a list of animations, or {anims: [...], cols: n} when one
+    # animation has to be laid across a grid. Masie needs that: she is wider
+    # than she is tall, so six frames in a row would be 209px wide cells for art
+    # that has to be 240px tall. Three columns of two rows gives her 418px.
+    groupings: dict[str, object] = (
+        subject.sheets or ({subject.name: list(counts)} if counts else {}))
+
+    forced: dict[str, int | None] = {}
+    plain: dict[str, list[str]] = {}
+    for sheet_name, spec in groupings.items():
+        if isinstance(spec, dict):
+            plain[sheet_name] = list(spec.get("anims") or [])
+            forced[sheet_name] = spec.get("cols")
+        else:
+            plain[sheet_name] = list(spec)
+            forced[sheet_name] = None
+    groupings = plain
     if not groupings:
         notes.append("no animations known -- set `sheets:` in art.yaml")
         return SubjectPlan(subject.name, subject.kind, min_drawn, facings, mirror,
@@ -152,19 +169,37 @@ def plan_subject(
     sheets: list[SheetPlan] = []
     for sheet_name, anims in groupings.items():
         anims = list(anims)
+
+        cols_override = forced.get(sheet_name)
+        if cols_override and len(anims) == 1:
+            # One animation wrapped across the grid. The cutter reads rows top
+            # to bottom and frames left to right within a row, so concatenating
+            # them restores the order -- which only holds because the sheet
+            # carries a single animation.
+            total = counts.get(anims[0], 6)
+            cols = int(cols_override)
+            rows = -(-total // cols)
+            sheets.append(SheetPlan(
+                sheet_name, anims, cols, rows,
+                canvas // cols, canvas // rows, min_drawn, facings, wrapped=total))
+            notes.append(
+                f"`{sheet_name}`: {total} frames of {anims[0]} laid {cols}x{rows}, "
+                f"read left to right then top to bottom")
+            continue
+
         chunks = [anims[i:i + rows_max] for i in range(0, len(anims), rows_max)] or [[]]
         for n, chunk in enumerate(chunks, 1):
             cols = max((counts.get(a, 6) for a in chunk), default=6)
             rows = len(chunk)
+            name = sheet_name if len(chunks) == 1 else f"{sheet_name}-{n}"
             if canvas // max(cols, 1) < min_drawn:
                 # A wide pose needs roughly its own height of width. When the
                 # columns squeeze below that, the frames get clipped, not small.
                 notes.append(
-                    f"`{name if len(chunks) > 1 else sheet_name}`: {cols} columns "
-                    f"leaves {canvas // cols}px of width for {min_drawn}px art -- "
-                    "split the longest animation or raise the canvas"
+                    f"`{name}`: {cols} columns leaves {canvas // cols}px of width "
+                    f"for {min_drawn}px art -- lay the animation across a grid "
+                    f"(`cols:` in art.yaml) or raise the canvas"
                 )
-            name = sheet_name if len(chunks) == 1 else f"{sheet_name}-{n}"
             sheets.append(SheetPlan(
                 name, chunk, cols, rows,
                 canvas // max(cols, 1), canvas // max(rows, 1), min_drawn, facings,

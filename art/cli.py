@@ -22,6 +22,7 @@ from art import profile as profile_mod
 from art.audit import rows as audit_rows
 from art.measure import read_legacy
 from art.plan import plan_subject
+from art.profile import backdrop_for
 from art.refs import resolve as resolve_refs
 from art import draw as draw_mod
 from art import effects as fx_mod
@@ -389,7 +390,11 @@ def plan(ctx, names, everything, budget, tight) -> None:
                 t.add_row(sh.name, f"{sh.cols}×{sh.rows}", f"{sh.cell_w}×{sh.cell_h}",
                           ", ".join(sh.anims) or "—", ok)
             console.print(t)
-        refs = resolve_refs(prof, prof.subjects[pl.subject])
+        subj = prof.subjects[pl.subject]
+        warn = _backdrop_warning(prof, subj)
+        if warn:
+            console.print(f"  [bold red]backdrop:[/bold red] {warn}")
+        refs = resolve_refs(prof, subj)
         if refs:
             console.print("  [dim]references:[/dim] " + ", ".join(
                 f"[bold]{r.role}[/bold]=" + r.path.name for r in refs))
@@ -512,6 +517,29 @@ def _issue_note(subject, sheet) -> str:
             + "; ".join(parts) + ".")
 
 
+def _backdrop_warning(prof, subject) -> str:
+    """Whether this subject's backdrop would be keyed out of the character."""
+    ref = next((r for r in resolve_refs(prof, subject) if r.role == "identity"), None)
+    if ref is None:
+        return ""
+    try:
+        import numpy as np
+        from PIL import Image
+        a = np.asarray(Image.open(ref.path).convert("RGB"))
+    except Exception:
+        return ""
+    art = ~((a > 235).all(axis=-1))
+    key = backdrop_for(prof, subject)
+    bad = cut_mod.spill_conflict(a, cut_mod.hex_to_rgb(key), art)
+    if bad <= 0.30:
+        return ""
+    ranked = cut_mod.best_backdrop(a, art)
+    safe = ", ".join(f"{n} ({v})" for n, v, score in ranked[:2] if score <= 0.10)
+    return (f"{key} would despill {bad * 100:.0f}% of this character's own pixels "
+            f"-- its dominant channel is the character's too."
+            + (f" Try {safe}." if safe else ""))
+
+
 def _groups_or_empty(prof):
     try:
         return read_legacy(_atlas_path(prof))
@@ -581,7 +609,7 @@ def draw(ctx, sheet, note, model, dry_run) -> None:
 
 # ---------------------------------------------------------------- view --
 
-def _candidate_rows(path, backdrop, names, expect, write_to):
+def _candidate_rows(path, backdrop, names, expect, write_to, wrapped=0):
     """Detect the frames on a generated sheet, and write it out KEYED.
 
     Writing the raw sheet would leave every frame sitting in a rectangle of
@@ -597,6 +625,18 @@ def _candidate_rows(path, backdrop, names, expect, write_to):
     Image.fromarray(cut_mod.keyed(rgb, key)).save(write_to)
 
     out, short, extra = {}, [], []
+
+    if wrapped:
+        # The whole grid is ONE animation. Rows are a layout, not a list of
+        # animations, so they concatenate -- left to right, then top to bottom,
+        # which is the order they were asked for and the order find_rows returns.
+        boxes = [b for row in rows for b in row.boxes]
+        name = names[0] if names else "frames"
+        out[name] = [b.as_list() for b in boxes]
+        if len(boxes) != wrapped:
+            short.append(f"{name} ({len(boxes)} of {wrapped})")
+        return out, short, extra
+
     for i, row in enumerate(rows):
         # A sheet can hold rows the profile no longer wants -- the frog's
         # candidate still carries the `sit` row that was retired after it was
@@ -632,7 +672,11 @@ def view(ctx, subject, candidate, port, no_open) -> None:
     sub = prof.subjects[subject]
     source = sub.raw.get("source") or {}
     prefix = source.get("prefix", "")
-    anim_names = next(iter(sub.sheets.values()), []) if sub.sheets else []
+    first_sheet = next(iter(sub.sheets.values()), None) if sub.sheets else None
+    if isinstance(first_sheet, dict):
+        anim_names = list(first_sheet.get("anims") or [])
+    else:
+        anim_names = list(first_sheet or [])
 
     serve = Path(__import__("tempfile").mkdtemp(prefix="art-view-"))
     images, per_row = {}, {}
@@ -669,7 +713,9 @@ def view(ctx, subject, candidate, port, no_open) -> None:
         pl = plan_subject(prof, sub, groups)
         expect = pl.sheets[0].cols if pl.sheets else None
         detected, short, extra = _candidate_rows(
-            candidate, prof.backdrop, anim_names, expect, serve / "candidate.png")
+            candidate, backdrop_for(prof, sub), anim_names, expect,
+            serve / "candidate.png",
+            wrapped=(pl.sheets[0].wrapped if pl.sheets else 0))
         if short:
             console.print("[yellow]incomplete rows:[/yellow] " + ", ".join(short)
                           + " [dim]— frames touching, below the 24px the rules ask for[/dim]")

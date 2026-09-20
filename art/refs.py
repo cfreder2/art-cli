@@ -39,9 +39,10 @@ ROLE_PRIORITY = {"style": 0, "pose": 1, "identity": 2, "revise": 3}
 ROLE_INSTRUCTION = {
     "style": "match its brushwork, palette, line weight and outline; "
              "do not copy its subject or composition",
-    "identity": "this is the character. Keep the markings, colours, silhouette "
-                "and costume exactly. IGNORE its resolution and framing -- it is "
-                "the reference for who, not for how big",
+    "identity": "this is WHO the character is. Keep the colours, markings, "
+                "proportions and costume exactly. Do NOT copy its poses, its "
+                "framing or its resolution -- the poses are specified above, and "
+                "where they differ from this image the description wins",
     "revise": "this is the sheet being changed. Keep every row not named below "
               "identical, including costume and palette",
     "pose": "follow this layout and posing",
@@ -83,7 +84,17 @@ def resolve(
             if held is None or ROLE_PRIORITY[role] > ROLE_PRIORITY[held]:
                 by_path[p] = role
 
-    add("style", profile.raw.get("style_ref"))
+    # A subject's own sheet is never a style reference FOR that subject: the
+    # style instruction says "do not copy its subject", which is nonsense
+    # pointed at the very character being drawn. Identity covers it instead.
+    own = (subject.raw.get("source") or {}).get("sheet")
+    own_path = (root / own).resolve() if own else None
+    for candidate in (profile.raw.get("style_ref") or []):
+        c = Path(candidate)
+        c = c if c.is_absolute() else root / c
+        if own_path and c.resolve() == own_path:
+            continue
+        add("style", c)
 
     declared = subject.raw.get("reference") or {}
     if isinstance(declared, dict):

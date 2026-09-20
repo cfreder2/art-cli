@@ -59,6 +59,16 @@ class Subject:
         return (None, min_drawn_px(self.height_tiles, tile_px))
 
 
+def backdrop_for(profile: "Profile", subject: "Subject") -> str:
+    """The key colour to draw this subject on.
+
+    Per subject, not per project, because the rule it serves is "a colour the
+    artwork never uses" and that is a fact about the character. Magenta is
+    right for a green frog and destroys a pink axolotl.
+    """
+    return subject.raw.get("backdrop") or profile.backdrop
+
+
 @dataclass
 class Profile:
     path: Path

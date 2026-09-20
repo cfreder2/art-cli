@@ -28,7 +28,8 @@ SHEET_RULES = [
     "Outline every frame in a dark colour far from the background. An outline "
     "close to the background gets silently eaten when the background is keyed.",
     "NOTHING in the frame but the character. No ground, no prop, no vine, no "
-    "shadow, no groundline. The character floats on the flat background.",
+    "shadow. Do not DRAW a groundline -- but place every frame as though "
+    "standing on the same invisible one, so the feet line up across the sheet.",
     "The SAME character in every frame: identical colours, markings, "
     "proportions and costume. A detail present in one frame of four becomes a "
     "flicker when the row is animated.",
@@ -39,8 +40,8 @@ SHEET_RULES = [
     "not for copying.",
     "Every frame faces the SAME direction: {facing}. Do not draw a turnaround "
     "or a mirrored set -- the game flips the sprite itself.",
-    "Within one row, every frame sits on the SAME groundline, so the animation "
-    "does not bob. Across rows the pose may differ.",
+    "Align every frame to that same invisible groundline, so the animation "
+    "does not bob when it plays.",
 ]
 
 
@@ -54,14 +55,26 @@ def build(
 ) -> str:
     facing = subject.raw.get("facing", "right")
     anim_notes = subject.raw.get("anims") or {}
-    described = [
-        f"  Row {i}: {name} — {anim_notes.get(name, 'a ' + name + ' cycle')}"
-        f" ({sheet.cols} frames)"
-        for i, name in enumerate(sheet.anims, 1)
-    ]
+    if sheet.wrapped:
+        only = sheet.anims[0]
+        described = [
+            f"  ONE continuous {sheet.wrapped}-frame {only} cycle, laid out "
+            f"{sheet.cols} across and {sheet.rows} down. Read it left to right "
+            f"along the top row, then continue on the next row — frame "
+            f"{sheet.cols + 1} sits below frame 1.",
+            f"  {only} — {anim_notes.get(only, 'a ' + only + ' cycle')}",
+        ]
+    else:
+        described = [
+            f"  Row {i}: {name} — {anim_notes.get(name, 'a ' + name + ' cycle')}"
+            f" ({sheet.cols} frames)"
+            for i, name in enumerate(sheet.anims, 1)
+        ]
 
+    from art.profile import backdrop_for
     rules = "\n".join(
-        f"- {r.format(backdrop=profile.backdrop, facing=facing)}" for r in SHEET_RULES
+        f"- {r.format(backdrop=backdrop_for(profile, subject), facing=facing)}"
+        for r in SHEET_RULES
     )
 
     parts = [
@@ -72,7 +85,7 @@ def build(
         "",
         f"Sheet: {sheet.cols} columns x {sheet.rows} rows, evenly spaced. "
         f"Each cell is about {sheet.cell_w}x{sheet.cell_h}px.",
-        "Rows, top to bottom:",
+        ("Layout:" if sheet.wrapped else "Rows, top to bottom:"),
         *described,
         "",
         f"Size: the character must be AT LEAST {sheet.min_drawn}px tall in every "

@@ -793,3 +793,84 @@ profile and the code, never to the profile alone.
 A sheet drawn before an animation list changed still carries the extra row.
 The preview names it `unassigned row N` rather than `row3`, and says why:
 hiding it behind a positional name is how a stale row gets packed.
+
+---
+
+# Masie, and the backdrop rule the spec already had
+
+## The walk was never a walk
+
+Her `run` row, laid on a shared baseline, is a **float**: body horizontal,
+limbs tucked, nothing touching the ground. Every ground pose on her sheet is
+drawn the same way — she is a swimming axolotl in all of them. "Her feet do not
+stay on the baseline" was not a rigging bug; the feet were never down.
+
+So the row description does the work: a diagonal gait, front-left with
+back-right, legs under the body rather than splayed, belly clear of the ground,
+lifted feet staying low. Stated as anatomy, because "make her walk properly" is
+not a thing a generator can act on.
+
+## One animation across a grid
+
+Masie is **wider than she is tall** — her frames run about 1.4:1. Six frames in
+one row of a 1254px canvas is a 209px cell for art that has to be 240px tall,
+so the frames get clipped rather than small. Three columns of two rows gives
+her 418px.
+
+`sheets: {masie-run: {anims: [run], cols: 3}}` lays one animation across the
+whole grid. The cutter reads rows top to bottom and frames left to right, so
+concatenating restores the order — which only holds because the sheet carries a
+single animation, and is why `wrapped` is recorded rather than inferred.
+
+## The backdrop is a fact about the character
+
+The spec's first rule is that a backdrop must be **a colour the artwork never
+uses**. The project set magenta once and every subject inherited it. Masie is
+pink.
+
+Despill pulls a pixel's key-dominant channel back toward the channels the key
+does not use. Magenta's dominant channel is red. So is hers. Measured on her
+own sheet:
+
+| backdrop | of Masie's pixels damaged | of Mr Frog's |
+| --- | --- | --- |
+| green | **0.0%** | 63.9% |
+| blue | 6.7% | **0.6%** |
+| magenta | **78.5%** | 17.1% |
+
+The first generation came back a **grey** axolotl, and it was not only the
+model: the keyer was pulling her red channel down by 21 on 70% of her pixels.
+Her own colour read as spill.
+
+So `backdrop` is per subject, and `plan` measures the chosen one against the
+identity reference and refuses to stay quiet:
+
+```
+backdrop: #FC309B would despill 78% of this character's own pixels
+  -- its dominant channel is the character's too. Try green (#00FF00).
+```
+
+On green: despill damage 1.5%, and she is pink again. The check now runs before
+a generation is spent, which is where it belongs — this one cost an image to
+learn.
+
+## Two contradictions the prompt was carrying
+
+Reading the assembled prompt before spending caught both:
+
+- *"No groundline"* fought *"every frame sits on the same groundline"*. It now
+  says do not **draw** one, but align every frame as though standing on the
+  same invisible one.
+- `identity` said *"keep the silhouette exactly"* while the entire job was to
+  change her silhouette from floating to walking. It now says identity means
+  **who**, never which pose, and that where the reference and the description
+  disagree the description wins.
+
+A subject's own sheet is also no longer attached as its own `style` reference,
+since that instruction says "do not copy its subject" — nonsense aimed at the
+character being drawn.
+
+## Result
+
+288–302px tall against a 240px minimum, every frame's lowest point within 3px
+of the shared baseline, four legs under her, belly off the ground, and pink.

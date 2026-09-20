@@ -193,3 +193,42 @@ def keyed(rgb: np.ndarray, key: tuple[int, int, int]) -> np.ndarray:
 def hex_to_rgb(value: str) -> tuple[int, int, int]:
     v = value.lstrip("#")
     return (int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16))
+
+
+# Backdrops worth offering, and what each one is safe against. The rule they
+# serve is the spec's first: a backdrop must be a colour the artwork never
+# uses, so it can be keyed by colour alone.
+PALETTE = {
+    "magenta": "#FC309B",
+    "green": "#00FF00",
+    "blue": "#0033FF",
+    "orange": "#FF7A00",
+}
+
+
+def spill_conflict(rgb: np.ndarray, key: tuple[int, int, int],
+                   art: np.ndarray | None = None) -> float:
+    """How much of this artwork the despill would damage, 0..1.
+
+    Despill pulls a pixel's key-dominant channel back toward the channels the
+    key does not use. That is right for a green rind on a pink axolotl and
+    catastrophic for the axolotl: magenta's dominant channel is red, and so is
+    hers, so her own colour reads as spill.
+
+    Measured rather than assumed, because "is this character too close to the
+    backdrop" is exactly the judgement that gets made wrong by eye.
+    """
+    if art is None:
+        art = np.ones(rgb.shape[:2], dtype=bool)
+    if not art.any():
+        return 0.0
+    changed = np.abs(unspill(rgb, key).astype(int) - rgb.astype(int)).max(axis=-1)
+    return float((changed[art] > 10).mean())
+
+
+def best_backdrop(rgb: np.ndarray, art: np.ndarray | None = None
+                  ) -> list[tuple[str, str, float]]:
+    """Every offered backdrop, ranked by how little of this art it would harm."""
+    scored = [(name, value, spill_conflict(rgb, hex_to_rgb(value), art))
+              for name, value in PALETTE.items()]
+    return sorted(scored, key=lambda row: row[2])

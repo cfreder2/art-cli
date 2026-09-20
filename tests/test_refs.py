@@ -42,12 +42,25 @@ def test_a_file_is_never_attached_twice(game):
     assert len(refs) == 1 and refs[0].role == "identity"
 
 
-def test_identity_tells_the_model_to_ignore_the_resolution(game):
-    """Mr Frog is 45x45 -- that is the bug, not the target."""
+def test_identity_overrides_nothing_it_should_not(game):
+    """Mr Frog is 45x45 -- that is the bug, not the target -- and Masie's sheet
+    shows her floating when the whole point is to make her walk. So identity
+    means WHO, never how big and never which pose."""
     prof = _profile(game)
     frog = Subject("frog", state="legacy", raw={"source": {"sheet": "frog.png"}})
     block = prompt_block(resolve(prof, frog))
-    assert "Image 1" in block and "IGNORE its resolution" in block
+    assert "Image 1" in block
+    assert "Do NOT copy its poses" in block and "resolution" in block
+    assert "the description wins" in block
+
+
+def test_a_subject_is_never_its_own_style_reference(game):
+    """The style instruction says "do not copy its subject", which is nonsense
+    pointed at the character being drawn."""
+    prof = _profile(game, style_ref=["style.png", "croaks.png"])
+    croaks = Subject("croaks", state="legacy", raw={"source": {"sheet": "croaks.png"}})
+    roles = {r.path.name: r.role for r in resolve(prof, croaks)}
+    assert roles == {"style.png": "style", "croaks.png": "identity"}
 
 
 def test_missing_files_are_skipped_rather_than_promised(game):
