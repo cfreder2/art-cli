@@ -1218,3 +1218,63 @@ Swing went 40% → **10%**, and she came back **taller** as a side effect: 246px
 against 201px, because a body that does not stretch sideways fits more of the
 cell vertically. Less exaggeration bought both a better silhouette and better
 resolution.
+
+---
+
+# `pack`: merging a redraw into an atlas that already ships
+
+A redraw happens one character at a time, so packing cannot mean "rebuild
+everything from the new art" — most of the art is still the old art, and the old
+packer is the only thing that knows how to cut it. So `pack` **merges**: the
+existing atlas is kept whole, new frames are appended below it, and only the
+animations that were redrawn are repointed.
+
+Two things have to be recorded for mixed-resolution art to be drawable.
+
+## Scale, and the trap in computing it
+
+A game derives ONE scale per character from a reference frame — AXI uses
+`1.15 / atlas.axi.idle[0][3]` — and applies it to every row. Masie's run came
+back at 246px against an idle still drawn at 90px, so dropped in untouched it
+would have rendered **three times too big**.
+
+So each replaced row carries a multiplier. The obvious formula, old height over
+new height, is wrong: when the reference row is **itself** redrawn the base
+scale moves with it and no correction is needed at all. The frog's `idle` is his
+own reference, so replacing it self-corrects at ×1.0; Masie's idle is untouched,
+so her run needs the full ×0.329.
+
+The right quantity is the row's height *relative to its reference*, preserved:
+
+```
+multiplier = (old_row_top / old_ref) / (new_row_top / new_ref)
+```
+
+Verified on the packed atlas at 131px per tile — drawn sizes before and after:
+
+| row | drawn before | drawn after | source pixels |
+| --- | --- | --- | --- |
+| axi/run | 132px | 133px | 81 → 246 (**3.0×**) |
+| npc/frog_idle | 138px | 138px | 45 → 199 (**4.4×**) |
+| axi/idle | 151px | 151px | unchanged |
+
+Same size on screen, three to four times the pixels. That is what a resolution
+fix should look like from the game's side: nothing moves.
+
+## The two changes the game needs
+
+```js
+const mul = (this.a.scales && this.a.scales[group + '/' + name]) || 1;
+scale *= mul;
+const anchor = (f.length > 5 ? f[5] : f[2] / 2) * scale * ts;
+```
+
+Both degrade correctly: a row with no `scales` entry and frames with no sixth
+number are drawn exactly as before, which is most of the atlas.
+
+## And the prerequisite that finally came due
+
+`build_web.py:28` called `pack_atlas.py` on every build, which would have
+regenerated the atlas from the old concept sheets and thrown away the redraw.
+That call is commented out, with the reason, and the committed atlas is the
+artifact now — as designed several turns ago, when it was still theoretical.

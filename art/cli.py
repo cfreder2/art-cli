@@ -27,6 +27,7 @@ from art.refs import resolve as resolve_refs
 from art import draw as draw_mod
 from art import effects as fx_mod
 from art import seams as seams_mod
+from art import pack as pack_mod
 from art import template as tpl_mod
 from art.prompt import build as build_prompt
 from art import cut as cut_mod
@@ -1167,3 +1168,90 @@ def accept(ctx, sheet, candidate, note) -> None:
                   f"[dim]→ {dest.relative_to(prof.root)}[/dim]")
     console.print(f"[dim]{subject.name} is now state=accepted; "
                   f"`art check` holds it to the rules from here.[/dim]")
+
+
+# ---------------------------------------------------------------- pack --
+
+@main.command()
+@click.option("--dry-run", is_flag=True, help="Report what would change; write nothing.")
+@click.pass_context
+def pack(ctx, dry_run) -> None:
+    """Merge every accepted sheet into the atlas the game loads.
+
+    The existing atlas is kept whole and the new frames are appended below it,
+    because a redraw happens one character at a time and most of the art is
+    still the old art. Only the animations that were redrawn are repointed.
+    """
+    from PIL import Image
+
+    prof = _load(ctx.obj["project"])
+    atlas_json = _atlas_path(prof)
+    atlas_png = atlas_json.parent / (__import__("json").loads(
+        atlas_json.read_text()).get("image") or "atlas.png")
+    existing = __import__("json").loads(atlas_json.read_text())
+
+    replacements = []
+    for name, subject in prof.subjects.items():
+        for sheet_name, rec in (subject.raw.get("accepted") or {}).items():
+            sheet_file = prof.root / rec.get("file", "")
+            if not sheet_file.is_file():
+                console.print(f"[yellow]missing[/yellow] {rec.get('file')}"); continue
+
+            pl = plan_subject(prof, subject, _groups_or_empty(prof))
+            sh = next((x for x in pl.sheets if x.name == sheet_name), None)
+            if sh is None:
+                continue
+            source = subject.raw.get("source") or {}
+            group, prefix = source.get("group", name), source.get("prefix", "")
+            retired = set(subject.raw.get("retired") or [])
+
+            keyed, rows = pack_mod.cut_sheet(
+                sheet_file, backdrop_for(prof, subject), sh.anims,
+                sh.cols, sh.wrapped)
+
+            # The animation whose FIRST frame sets this character's scale in
+            # the game. If it is one of the rows being replaced, the base scale
+            # moves with it and nothing needs correcting.
+            ref_key = subject.raw.get("scale_ref") or f"{prefix}idle"
+            ref_old_list = (existing.get(group) or {}).get(ref_key) or []
+            ref_old = ref_old_list[0][3] if ref_old_list else 0
+            ref_short = ref_key[len(prefix):] if prefix else ref_key
+            ref_new = (max(b.h for b in rows[ref_short])
+                       if ref_short in rows else ref_old)
+
+            for anim, boxes in rows.items():
+                if anim in retired:
+                    continue
+                atlas_key = f"{prefix}{anim}"
+                old = (existing.get(group) or {}).get(atlas_key) or []
+                images = [keyed.crop((b.x, b.y, b.x + b.w, b.y + b.h)) for b in boxes]
+                replacements.append(pack_mod.Replacement(
+                    group=group, anim=atlas_key, frames=boxes, images=images,
+                    scale=pack_mod.scale_for(boxes, old, ref_old, ref_new),
+                    old_frames=len(old)))
+
+    if not replacements:
+        raise click.ClickException("Nothing accepted to pack. Run `art accept` first.")
+
+    table = Table(header_style="bold", title="Into the atlas")
+    table.add_column("row"); table.add_column("frames", justify="right")
+    table.add_column("tallest", justify="right")
+    table.add_column("scale", justify="right"); table.add_column("was", justify="right")
+    for r in replacements:
+        table.add_row(f"{r.group}/{r.anim}",
+                      f"{r.old_frames} → {len(r.frames)}",
+                      f"{max(b.h for b in r.frames)}px",
+                      f"×{r.scale}", f"{r.old_frames} frames")
+    console.print(table)
+    console.print("[dim]scale cancels the new resolution, so each row lands at "
+                  "the size it already had — sharper, not bigger.[/dim]")
+    if dry_run:
+        return
+
+    result = pack_mod.merge(atlas_png, atlas_json, replacements,
+                            atlas_png, atlas_json)
+    console.print(f"[green]packed[/green] {result.image.name} "
+                  f"[dim]{result.width}×{result.height}, "
+                  f"+{result.added_px}px of new art[/dim]")
+    console.print("[dim]the game needs the anchor and the scales map — "
+                  "see DESIGN.md.[/dim]")
