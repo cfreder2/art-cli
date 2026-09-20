@@ -1,0 +1,8 @@
+__pycache__/
+.venv/
+*.pyc
+.pytest_cache/
+dist/
+build/
+sheets/
+frames/

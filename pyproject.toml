@@ -1,0 +1,26 @@
+[project]
+name = "art-cli"
+version = "0.0.0"
+description = "Sprites and concept art for games: plan, generate, key, cut, measure, pack"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.0.0",
+    "rich>=13.0.0",
+    "pydantic>=2.0.0",   # typed art.yaml, doubling as structured outputs
+    "pillow>=10.0.0",    # keying, cutting, and the WebP encoder
+    "numpy>=1.24.0",
+    "pyyaml>=6.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0.0"]
+
+[project.scripts]
+art = "art.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["art"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
