@@ -548,3 +548,67 @@ by path silently dropped the second role: the frog's redraw would have gone out
 with no identity reference at all. Roles now have precedence — `revise` over
 `identity` over `pose` over `style` — because telling a model to ignore the
 subject of the very image it is drawing from is worse than attaching nothing.
+
+---
+
+# What the first real generation taught
+
+One sheet, Mr Frog, three rows, three references. It came back usable, and it
+came back wrong in a way worth writing down.
+
+## The canvas is 1254, not 2048
+
+The prompt asked for 2048×2048. `gpt-image` returned **1254×1254**, which is
+the same size `DnD-CLI` records for its actor plates. The requested canvas is
+not a request the media service honours.
+
+Everything in the spec's §5 sheet-layout table is built on 2048, so those grids
+describe a canvas this generator does not produce. `canvas:` is now a measured
+number with a default of 1254, and it is per-project because another backend
+will answer differently.
+
+## Columns are what cap sprite size
+
+At 1254 square with six columns, a cell is 209px wide. The frog came back
+**189–207px tall** against a 220px minimum — not because the model drew small,
+but because it could not draw bigger without frames colliding.
+
+`plan` had the check for this all along, and it fires the moment the canvas is
+honest:
+
+```
+· `frog`: 6 columns leaves 209px of width for 220px art
+  -- split the longest animation or raise the canvas
+```
+
+So the spec's advice generalises with a sharper edge: *fewer frames per image*
+means **fewer columns**. Four columns of the same canvas gives 313px cells and
+clears the minimum with room. Six does not, at any row count.
+
+## It still fixed the problem
+
+Mr Frog ships today at **45×45**. The candidate is **~195px tall** — 4.3× the
+linear size and about nineteen times the pixel area. Against the 192px-per-tile
+target he goes from 4.7× upscaled on a MacBook to 1.13×. Short of spec, and
+unrecognisably better.
+
+## What the sheet got right, and what it did not
+
+Right, and all of it is a rule from §7 that held: flat magenta backdrop, every
+frame facing right with no turnaround, no labels copied from the three
+reference sheets, nothing in frame but the character, one consistent character
+across eighteen frames, and a hop arc in row 2 that reads in order.
+
+Wrong: two frames in the hop row touch and merge — §7.6, found by measurement
+rather than by eye. And `idle` and `sit` came back nearly indistinguishable,
+which is a prompt problem rather than a drawing problem: for a frog those
+poses genuinely are similar, and the row descriptions have to say what
+separates them.
+
+## Reading the game first is worth a generation
+
+`game.js:2502` only ever draws three of Mr Frog's six rows. `walk`, `run` and
+`hurt` are in the shipped atlas and unreachable -- frogs hop, which is the
+whole of their movement model, and he is a friend who never takes damage.
+Planning from what the code draws rather than from what the old sheet holds cut
+him from two sheets to one before anything was spent.

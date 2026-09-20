@@ -23,7 +23,9 @@ from art.audit import rows as audit_rows
 from art.measure import read_legacy
 from art.plan import plan_subject
 from art.refs import resolve as resolve_refs
+from art import draw as draw_mod
 from art import seams as seams_mod
+from art.prompt import build as build_prompt
 from art.spec import DEVICES, DEVICE_BY_KEY, TARGET_TILE_PX
 
 console = Console()
@@ -87,11 +89,14 @@ def main(ctx: click.Context, project: Path | None) -> None:
               help="Where a group's source sheet lives (repeatable). A redraw "
                    "attaches it as the identity reference automatically.")
 @click.option("--tile-px", default=TARGET_TILE_PX, show_default=True, help="The target tile size.")
+@click.option("--canvas", default=1254, show_default=True,
+              help="What the generator actually returns. gpt-image gives 1254 square, "
+                   "whatever size the prompt asks for -- measured, not assumed.")
 @click.option("--force", is_flag=True, help="Overwrite an existing art.yaml.")
 @click.option("--dry-run", is_flag=True, help="Print the draft; write nothing.")
 @click.pass_context
 def init(ctx, from_atlas, splits, heights, seamless_names, style_refs,
-         sheet_paths, tile_px, force, dry_run) -> None:
+         sheet_paths, tile_px, canvas, force, dry_run) -> None:
     """Draft an art.yaml for this project.
 
     The draft is a starting point, not an answer: which entries are separate
@@ -170,7 +175,7 @@ def init(ctx, from_atlas, splits, heights, seamless_names, style_refs,
 
     data = {
         "tile_px": tile_px,
-        "canvas": 2048,
+        "canvas": canvas,
         "backdrop": "#FC309B",
         "atlas": str(from_atlas.relative_to(root)) if from_atlas else "web/atlas.json",
         "style_ref": list(style_refs),
@@ -476,3 +481,76 @@ def check(ctx, names, everything, seams_only) -> None:
     if failures:
         console.print(f"[bold red]{failures} accepted tile(s) failed.[/bold red]")
         raise SystemExit(1)
+
+
+def _sheet_for(prof, name):
+    """Resolve `frog-1` or `frog` to (subject, sheet plan, whole plan)."""
+    for sub_name, subject in prof.subjects.items():
+        pl = plan_subject(prof, subject, _groups_or_empty(prof))
+        for sh in pl.sheets:
+            if sh.name == name or (sub_name == name and len(pl.sheets) == 1):
+                return subject, sh, pl
+    raise click.ClickException(
+        f"No sheet named {name!r}. `art plan --all` lists them.")
+
+
+def _groups_or_empty(prof):
+    try:
+        return read_legacy(_atlas_path(prof))
+    except click.ClickException:
+        return {}
+
+
+# -------------------------------------------------------------- prompt --
+
+@main.command()
+@click.argument("sheet")
+@click.option("--note", default="", help="Extra art direction for this sheet.")
+@click.pass_context
+def prompt(ctx, sheet, note) -> None:
+    """The exact text a generation would be sent. Writes nothing, costs nothing."""
+    prof = _load(ctx.obj["project"])
+    subject, sh, pl = _sheet_for(prof, sheet)
+    refs = resolve_refs(prof, subject)
+    click.echo(build_prompt(prof, subject, sh, pl, refs, note))
+    if refs:
+        console.print("\n[dim]attachments, in order: "
+                      + ", ".join(f"{i}. {r.role}={r.path.name}"
+                                  for i, r in enumerate(refs, 1)) + "[/dim]")
+
+
+# ---------------------------------------------------------------- draw --
+
+@main.command()
+@click.argument("sheet")
+@click.option("--note", default="", help="Extra art direction for this sheet.")
+@click.option("--model", "-m", default=None,
+              help="The AGENT model. It relays the prompt; it is not the image "
+                   "model, which the media service picks and no flag can pin.")
+@click.option("--dry-run", is_flag=True, help="Show the prompt and the command; generate nothing.")
+@click.pass_context
+def draw(ctx, sheet, note, model, dry_run) -> None:
+    """Generate a candidate sheet. This is the only verb that spends anything."""
+    prof = _load(ctx.obj["project"])
+    subject, sh, pl = _sheet_for(prof, sheet)
+    refs = resolve_refs(prof, subject)
+    text = build_prompt(prof, subject, sh, pl, refs, note)
+    out, n = draw_mod.next_candidate(prof.root / "art" / "candidates", sh.name)
+
+    if dry_run:
+        click.echo(text)
+        console.print(f"\n[dim]would write[/dim] {out}")
+        console.print("[dim]attachments: [/dim]" + (", ".join(
+            f"{i}. {r.role}={r.path.name}" for i, r in enumerate(refs, 1)) or "none"))
+        return
+
+    console.print(f"[dim]generating[/dim] [bold]{sh.name}[/bold] "
+                  f"[dim]— {sh.cols}×{sh.rows}, ≥{sh.min_drawn}px, "
+                  f"{len(refs)} reference(s)[/dim]")
+    try:
+        made = draw_mod.generate(text, [str(r.path) for r in refs], out, model=model)
+    except draw_mod.DrawError as exc:
+        raise click.ClickException(str(exc)) from exc
+    console.print(f"[green]candidate {n}[/green] → {made.path}  "
+                  f"[dim]{made.seconds:.0f}s[/dim]")
+    console.print(f"[dim]next:[/dim] art cut {sh.name} --from {made.path.name}")
