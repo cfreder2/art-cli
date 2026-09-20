@@ -1683,3 +1683,29 @@ instead of continuously. For slow parallax at a low tile size, crisp wins.
 Worth noting the game draws its clouds at fractional coordinates too, at
 `game.js:2288`. It has always done so, and on a phone it will have the same
 shimmer — a real finding from previewing the art rather than the code.
+
+## Higher resolution art can look worse, and the filter is why
+
+Masie looked soft in the scene preview beside props that looked crisp. She is
+not lower quality: she was drawn at **0.38x** of her source and they at
+0.45-0.50x, and Canvas defaults `imageSmoothingQuality` to `'low'` -- a cheap
+filter that aliases below about half scale. She alone was under the line.
+
+The important part is what that means for the game, which sets
+`imageSmoothingEnabled` and never sets the quality:
+
+| | idle source | drawn on an iPhone SE | |
+| --- | --- | --- | --- |
+| before the redraw | 90px | 95px | 1.06x **up** |
+| after | 248px | 95px | **0.38x down** |
+
+Every redraw in this project moves a sprite from being upscaled to being
+downscaled. That is the whole point -- but it also moves it across the line
+where the default filter stops coping, so on a phone the sharper art could
+have looked **worse** than the art it replaced, purely on the resampling.
+
+One line in each: `ctx.imageSmoothingQuality = 'high'`.
+
+It is worth stating plainly because it inverts the usual intuition. Adding
+pixels is not automatically an improvement; it changes which resampling path
+the art takes, and the path it lands on has to be chosen.

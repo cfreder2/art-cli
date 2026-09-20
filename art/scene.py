@@ -93,6 +93,12 @@ toggle('edges', v => showEdges = v);
 toggle('motion', v => moving = v);
 syncDevs();
 
+/* Canvas defaults to 'low' smoothing, which is a cheap filter that aliases
+   hard below about half scale. Masie is drawn at 0.38 of her source here and
+   the props at 0.45-0.50, so she alone came out soft -- the art was fine and
+   the preview was not. */
+function crisp(g) { g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high'; }
+
 const out = document.getElementById('out');
 const painters = [];
 
@@ -113,6 +119,7 @@ function tileField(t) {
     cv.width = cols * ts; cv.height = rows * ts;
     cv.style.width = cv.width + 'px'; cv.style.height = cv.height + 'px';
     const g = cv.getContext('2d');
+    crisp(g);
     g.clearRect(0, 0, cv.width, cv.height);
     for (let y = 0; y < rows; y++)
       for (let x = 0; x < cols; x++)
@@ -141,6 +148,7 @@ function propRow(props) {
     cv.width = Math.ceil(total * ts);
     cv.style.width = cv.width + 'px'; cv.style.height = cv.height + 'px';
     const g = cv.getContext('2d');
+    crisp(g);
     g.clearRect(0, 0, cv.width, cv.height);
     const base = cv.height - ts * 0.6;
     if (DATA.ground) {
@@ -176,6 +184,7 @@ function skyBand(bands) {
   });
   const paint = (now) => {
     const ts = device.px, g = cv.getContext('2d');
+    crisp(g);
     if (moving) drift += (now - t0) * 0.012; t0 = now;
     g.clearRect(0, 0, cv.width, cv.height);
     g.fillStyle = '#cfe9f5'; g.fillRect(0, 0, cv.width, cv.height);
