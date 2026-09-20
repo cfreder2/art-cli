@@ -26,6 +26,8 @@ from art.refs import resolve as resolve_refs
 from art import draw as draw_mod
 from art import seams as seams_mod
 from art.prompt import build as build_prompt
+from art import cut as cut_mod
+from art import view as view_mod
 from art.spec import DEVICES, DEVICE_BY_KEY, TARGET_TILE_PX
 
 console = Console()
@@ -554,3 +556,118 @@ def draw(ctx, sheet, note, model, dry_run) -> None:
     console.print(f"[green]candidate {n}[/green] → {made.path}  "
                   f"[dim]{made.seconds:.0f}s[/dim]")
     console.print(f"[dim]next:[/dim] art cut {sh.name} --from {made.path.name}")
+
+
+# ---------------------------------------------------------------- view --
+
+def _candidate_rows(path, backdrop, names):
+    """Detect the frames on a generated sheet and name the rows in order."""
+    import numpy as np
+    from PIL import Image
+    rgb = np.asarray(Image.open(path).convert("RGB"))
+    _, rows = cut_mod.detect(rgb, cut_mod.hex_to_rgb(backdrop))
+    out = {}
+    for i, row in enumerate(rows):
+        name = names[i] if i < len(names) else f"row{i + 1}"
+        out[name] = [b.as_list() for b in row.boxes]
+    return out
+
+
+@main.command()
+@click.argument("subject")
+@click.option("--candidate", "candidate", type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              default=None, help="A sheet to preview. Defaults to the newest candidate.")
+@click.option("--port", default=8731, show_default=True)
+@click.option("--no-open", "no_open", is_flag=True, help="Serve, but do not open a browser.")
+@click.pass_context
+def view(ctx, subject, candidate, port, no_open) -> None:
+    """Preview the animations in a browser, at real device sizes.
+
+    Shows what ships today beside the candidate, both scaled the way the game
+    scales them, so the comparison is the one the player would see.
+    """
+    import http.server, socketserver, threading, webbrowser
+
+    prof = _load(ctx.obj["project"])
+    if subject not in prof.subjects:
+        raise click.ClickException(f"Unknown subject: {subject}")
+    sub = prof.subjects[subject]
+    source = sub.raw.get("source") or {}
+    prefix = source.get("prefix", "")
+    anim_names = next(iter(sub.sheets.values()), []) if sub.sheets else []
+
+    serve = Path(__import__("tempfile").mkdtemp(prefix="art-view-"))
+    images, per_row = {}, {}
+
+    # What ships today.
+    groups = _groups_or_empty(prof)
+    group = groups.get(source.get("group", subject))
+    if group:
+        atlas_json = _atlas_path(prof)
+        img = atlas_json.parent / (__import__("json").loads(atlas_json.read_text()).get("image") or "atlas.png")
+        if img.is_file():
+            images["today.png"] = img
+            ref = None
+            for anim_name, anim in group.anims.items():
+                short = anim_name[len(prefix):] if prefix else anim_name
+                frames = [[f.x, f.y, f.w, f.h, f.lift] for f in anim.frames]
+                if ref is None or short == "idle":
+                    ref = anim.frames[0].h
+                per_row.setdefault(short, []).append(
+                    {"label": "today", "image": "today.png", "frames": frames, "ref_h": ref})
+            for variants in per_row.values():
+                for v in variants:
+                    if v["label"] == "today":
+                        v["ref_h"] = ref
+
+    # The candidate.
+    if candidate is None:
+        pool = sorted((prof.root / "art" / "candidates").glob(f"{subject}*.png"))
+        candidate = pool[-1] if pool else None
+    if candidate:
+        images["candidate.png"] = candidate
+        detected = _candidate_rows(candidate, prof.backdrop, anim_names)
+        ref = next((v[0][3] for k, v in detected.items() if k == "idle"),
+                   next(iter(detected.values()))[0][3] if detected else 1)
+        for name, frames in detected.items():
+            per_row.setdefault(name, []).append(
+                {"label": "candidate", "image": "candidate.png",
+                 "frames": frames, "ref_h": ref})
+
+    if not per_row:
+        raise click.ClickException("Nothing to preview: no atlas entry and no candidate.")
+
+    def order(item):
+        name = item[0]
+        has_new = any(v["label"] == "candidate" for v in item[1])
+        rank = anim_names.index(name) if name in anim_names else len(anim_names)
+        return (0 if has_new else 1, rank, name)
+
+    rows = []
+    for name, variants in sorted(per_row.items(), key=order):
+        first = variants[0]
+        rows.append({"name": name, "frames": first["frames"],
+                     "src_h": max(f[3] for f in first["frames"]),
+                     "spread": max(f[4] for f in first["frames"]),
+                     "variants": variants})
+
+    data = {"devices": view_mod.device_list(),
+            "height_tiles": sub.height_tiles or 1.0, "rows": rows}
+    view_mod.build(serve, f"{subject}",
+                   f"{len(rows)} animations · {sub.height_tiles or 1.0} tiles tall "
+                   f"· target {prof.tile_px}px per tile", data, images)
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **k): super().__init__(*a, directory=str(serve), **k)
+        def log_message(self, *a): pass
+
+    socketserver.TCPServer.allow_reuse_address = True
+    with socketserver.TCPServer(("127.0.0.1", port), Handler) as httpd:
+        url = f"http://127.0.0.1:{port}/"
+        console.print(f"[green]preview[/green] {url}  [dim]ctrl-c to stop[/dim]")
+        if not no_open:
+            threading.Timer(0.3, lambda: webbrowser.open(url)).start()
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            console.print("[dim]stopped[/dim]")

@@ -612,3 +612,34 @@ separates them.
 whole of their movement model, and he is a friend who never takes damage.
 Planning from what the code draws rather than from what the old sheet holds cut
 him from two sheets to one before anything was spent.
+
+---
+
+# `art view`
+
+A terminal cannot answer the question this tool exists to answer. So the
+preview serves a page and opens it, and the page draws to a canvas **exactly
+the way the game does**: one scale for the whole set derived from the reference
+frame, `lift` applied per frame. If it looks wrong here it looks wrong in the
+game.
+
+It shows **what ships today beside the candidate**, because the useful question
+is never "is this good" but "is this better, and by how much". Both are scaled
+by their own reference frame, so the comparison is the one a player would see.
+
+The resolution picker is the device table, not a zoom slider — 83, 131, 192,
+320 — with the upscale factor printed live under each variant in the same
+green/red `audit` uses. Also on the page: a speed slider, a **baseline overlay**
+so a bobbing frame is visible rather than inferred, and a frame box.
+
+Rows that have a candidate sort first. The ones that do not are still listed,
+which is how Mr Frog's preview shows `hurt`, `run` and `walk` as `today` only —
+a standing reminder that three of his six animations are art nobody can reach.
+
+The detector behind it is `cut.py`, and it is the same code the `cut` verb will
+use: background found by colour distance as a **ramp, never a threshold**, then
+frames found by gaps — rows first, then frames within a row. That is why the
+sheet rules demand 24px of clear background: the gap *is* the delimiter. When
+two frames touch, the detector merges them rather than inventing a boundary the
+art does not contain, which is exactly what it did to the hop row of the first
+generated sheet.
