@@ -415,6 +415,21 @@ def plan(ctx, names, everything, budget, tight) -> None:
 
 # --------------------------------------------------------------- check --
 
+def _issue_note(subject, sheet) -> str:
+    """Flagged frames, phrased as instructions for the next generation."""
+    rows = set(sheet.anims)
+    items = [i for i in (subject.raw.get("issues") or []) if i["anim"] in rows]
+    if not items:
+        return ""
+    parts = []
+    for i in items:
+        where = f"in the {i['anim']} row, frame {i['frame']} (counting from 0)"
+        parts.append(f"{where}: {i['note']}" if i.get("note")
+                     else f"{where} needs redrawing")
+    return ("Fix these specifically and keep everything else identical -- "
+            + "; ".join(parts) + ".")
+
+
 def _sheet_for(prof, name):
     """Resolve `frog-1` or `frog` to (subject, sheet plan, whole plan)."""
     for sub_name, subject in prof.subjects.items():
@@ -1330,61 +1345,73 @@ def pack(ctx, fmt, quality, dry_run) -> None:
         atlas_json.read_text()).get("image") or "atlas.png")
     existing = __import__("json").loads(atlas_json.read_text())
 
-    replacements = []
+    # Cut every accepted sheet first, because the row a character's scale is
+    # measured from now lives on its OWN sheet -- one animation per sheet is
+    # what made the frames big enough. Looking for it inside the sheet being
+    # processed finds nothing and silently falls back to the old height, which
+    # scaled the frog's jump to a seventh of its size.
+    cut_sheets = []
     for name, subject in prof.subjects.items():
         for sheet_name, rec in (subject.raw.get("accepted") or {}).items():
             sheet_file = prof.root / rec.get("file", "")
             if not sheet_file.is_file():
                 console.print(f"[yellow]missing[/yellow] {rec.get('file')}"); continue
-
             pl = plan_subject(prof, subject, _groups_or_empty(prof))
             sh = next((x for x in pl.sheets if x.name == sheet_name), None)
             if sh is None:
                 continue
-            source = subject.raw.get("source") or {}
-            group, prefix = source.get("group", name), source.get("prefix", "")
-            retired = set(subject.raw.get("retired") or [])
-
             keyed, rows = pack_mod.cut_sheet(
                 sheet_file, backdrop_for(prof, subject), sh.anims,
                 sh.cols, sh.wrapped)
+            cut_sheets.append((name, subject, sh, keyed, rows))
 
-            # The animation whose FIRST frame sets this character's scale in
-            # the game. If it is one of the rows being replaced, the base scale
-            # moves with it and nothing needs correcting.
-            ref_key = subject.raw.get("scale_ref") or f"{prefix}idle"
-            ref_old_list = (existing.get(group) or {}).get(ref_key) or []
-            ref_old = ref_old_list[0][3] if ref_old_list else 0
-            ref_short = ref_key[len(prefix):] if prefix else ref_key
-            ref_new = (max(b.h for b in rows[ref_short])
-                       if ref_short in rows else ref_old)
+    # Frame 0 of each character's reference row, after redrawing.
+    new_ref: dict[str, int] = {}
+    for name, subject, sh, keyed, rows in cut_sheets:
+        prefix = (subject.raw.get("source") or {}).get("prefix", "")
+        ref_key = subject.raw.get("scale_ref") or f"{prefix}idle"
+        short = ref_key[len(prefix):] if prefix else ref_key
+        if short in rows and rows[short]:
+            new_ref[name] = rows[short][0].h
 
-            nudges = (subject.raw.get("nudge") or {})
-            for anim, boxes in rows.items():
-                if anim in retired:
-                    continue
-                cut_mod.apply_nudges(boxes, nudges.get(anim) or {})
-                atlas_key = f"{prefix}{anim}"
-                old = (existing.get(group) or {}).get(atlas_key) or []
-                images = [keyed.crop((b.x, b.y, b.x + b.w, b.y + b.h)) for b in boxes]
-                # Effects are metadata, so they travel with the animation
-                # rather than being reimplemented in each game.
-                try:
-                    normalised = fx_mod.normalise(subject.raw.get("effects") or {})
-                except fx_mod.EffectError as exc:
-                    raise click.ClickException(f"{name} effects: {exc}") from exc
-                effects = fx_mod.for_anim(normalised, anim)
-                meta = {k: v for k, v in (
-                    ("frames", len(boxes)),
-                    ("effects", {n: {k: v for k, v in vals.items()
-                                     if k != "anchor"}
-                                 for n, vals in effects.items()} or None),
-                ) if v}
+    replacements = []
+    for name, subject, sh, keyed, rows in cut_sheets:
+        source = subject.raw.get("source") or {}
+        group, prefix = source.get("group", name), source.get("prefix", "")
+        retired = set(subject.raw.get("retired") or [])
+        ref_key = subject.raw.get("scale_ref") or f"{prefix}idle"
+        ref_old_list = (existing.get(group) or {}).get(ref_key) or []
+        ref_old = ref_old_list[0][3] if ref_old_list else 0
+        ref_new = new_ref.get(name, ref_old)
 
-                replacements.append(pack_mod.Replacement(
-                    group=group, anim=atlas_key, frames=boxes, images=images,
-                    scale=pack_mod.scale_for(boxes, old, ref_old, ref_new),
-                    old_frames=len(old), meta=meta))
+        nudges = (subject.raw.get("nudge") or {})
+        for anim, boxes in rows.items():
+            if anim in retired:
+                continue
+            cut_mod.apply_nudges(boxes, nudges.get(anim) or {})
+            atlas_key = f"{prefix}{anim}"
+            old = (existing.get(group) or {}).get(atlas_key) or []
+            images = [keyed.crop((b.x, b.y, b.x + b.w, b.y + b.h)) for b in boxes]
+
+            # The reference row needs no correction at all: the base scale is
+            # derived from its own frame 0, so it moves with it.
+            scale = (1.0 if atlas_key == ref_key
+                     else pack_mod.scale_for(boxes, old, ref_old, ref_new))
+
+            try:
+                normalised = fx_mod.normalise(subject.raw.get("effects") or {})
+            except fx_mod.EffectError as exc:
+                raise click.ClickException(f"{name} effects: {exc}") from exc
+            effects = fx_mod.for_anim(normalised, anim)
+            meta = {k: v for k, v in (
+                ("frames", len(boxes)),
+                ("effects", {n: {k: v for k, v in vals.items() if k != "anchor"}
+                             for n, vals in effects.items()} or None),
+            ) if v}
+
+            replacements.append(pack_mod.Replacement(
+                group=group, anim=atlas_key, frames=boxes, images=images,
+                scale=scale, old_frames=len(old), meta=meta))
 
     if not replacements:
         raise click.ClickException("Nothing accepted to pack. Run `art accept` first.")

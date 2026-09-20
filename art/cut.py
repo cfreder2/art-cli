@@ -220,12 +220,55 @@ def anchor_of(solid: np.ndarray, b: Box, mode: str = "centroid") -> int:
     return int(round(np.argwhere(patch)[:, 1].mean()))
 
 
+def already_keyed(image) -> bool:
+    """Does this image carry a real alpha channel rather than a flat backdrop?
+
+    A generator asked for a flat green plate sometimes returns a transparent
+    PNG instead -- it has done the keying itself. Colour-keying that against
+    green finds nothing, because there is no green: the whole sheet reads as
+    one object and cuts into a single 1254px "frame".
+    """
+    from PIL import Image as _Image
+
+    if not isinstance(image, _Image.Image) or image.mode not in ("RGBA", "LA"):
+        return False
+    a = np.asarray(image.convert("RGBA"))[..., 3]
+    return bool((a < 8).mean() > 0.25)
+
+
+def alpha_of(image) -> np.ndarray:
+    """The image's own alpha, as the 0..1 ramp the rest of this module wants."""
+    return np.asarray(image.convert("RGBA"))[..., 3].astype(np.float32) / 255.0
+
+
 def detect(rgb: np.ndarray, key: tuple[int, int, int],
            expect: int | None = None,
-           anchor: str = "centroid") -> tuple[np.ndarray, list[Row]]:
-    """(alpha, rows) for a sheet drawn on a flat key colour."""
-    alpha = alpha_from_colour(rgb, key)
+           anchor: str = "centroid",
+           alpha: np.ndarray | None = None
+           ) -> tuple[np.ndarray, list[Row]]:
+    """(alpha, rows) for a sheet, keyed by colour unless one is supplied."""
+    if alpha is None:
+        alpha = alpha_from_colour(rgb, key)
     return alpha, find_rows(alpha, expect=expect, anchor=anchor)
+
+
+def read(path, key: tuple[int, int, int], expect: int | None = None,
+         anchor: str = "centroid"):
+    """Open a sheet and key it whichever way it needs.
+
+    Returns (rgba_image, rows). The one place that decides between "flat
+    backdrop" and "already transparent", so nothing downstream has to.
+    """
+    from PIL import Image
+
+    img = Image.open(path)
+    if already_keyed(img):
+        img = img.convert("RGBA")
+        a = alpha_of(img)
+        return img, find_rows(a, expect=expect, anchor=anchor)
+    rgb = np.asarray(img.convert("RGB"))
+    a, rows = detect(rgb, key, expect=expect, anchor=anchor)
+    return Image.fromarray(keyed(rgb, key)), rows
 
 
 def apply_nudges(boxes: list[Box], nudges: dict) -> None:

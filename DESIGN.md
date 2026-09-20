@@ -1400,3 +1400,63 @@ One bug worth recording. `phase` names how an offset is *chosen* — `none`, `x`
 `random` — not the offset itself. Adding the string to the wave makes the whole
 expression `NaN` and the effect vanishes silently, which is the worst kind of
 failure: no error, no motion, nothing to notice.
+
+---
+
+# Finishing a character: what nine sheets taught
+
+Masie's other eight animations and the frog's two, generated in one batch.
+Everything below is a failure the batch produced, not a hypothetical.
+
+## The identity reference becomes the character's own accepted sheet
+
+Drawing the remaining eight from the original 45px sheet would have
+reintroduced every drift already corrected — the muzzle, the blue gills, the
+toes. Pointing `identity` at her **accepted run sheet** instead held one
+character across nine sheets. This was the cross-sheet consistency risk flagged
+several turns earlier as unproven; it works.
+
+## A wide character needs fewer columns than the arithmetic suggests
+
+Three columns gives 418px cells, and she came back up to **444px wide** in the
+stretched poses — so neighbouring frames touched and cut as one. Three sheets
+failed that way. Two columns gives 627px of width, and the shorter cells (418)
+still leave her well clear of the 240px minimum.
+
+The lesson is that the binding constraint for a wide character is **width per
+column**, and it has to be checked against the widest pose, not the standing
+one.
+
+## A generator sometimes keys the sheet for you
+
+`masie-defeat` came back as a **transparent PNG** rather than art on a green
+plate. Colour-keying that against green finds nothing, the whole sheet reads as
+one object, and it cuts into a single 1254px "frame". `cut.read()` now decides
+between "flat backdrop" and "already transparent" in one place, which is the
+third background mode the design named and never built.
+
+## Described motion gets amplified
+
+Asked for a breath, the idle came back swinging **21.8%** in height — 28% for
+the frog — where the old art swung 2.2%. That is not breathing, it is
+inflation. The same overshoot took the run's body stretch to 40% when a quarter
+was asked for.
+
+So the idles are drawn **static** — *"her body stays exactly the same size in
+every frame; the breathing is added by the game, so drawing it here would
+double it"* — and the motion comes from the `breathe` effect. The frog's
+redrawn idle swings 3%, so his breath is procedural. Masie's still swings 11%,
+so **hers is drawn and the effect is removed**: use whichever carries it, never
+both, because they add.
+
+## The scale reference moved to its own sheet
+
+With one animation per sheet, the row a character's scale is measured from is
+no longer on the sheet being packed. Looking for it there finds nothing and
+falls back to the old height, which scaled the frog's jump to **a seventh** of
+its size. `pack` now cuts every accepted sheet first, resolves each character's
+reference frame across all of them, and only then computes corrections. The
+reference row itself takes ×1.0, since the base scale moves with it.
+
+Verified across all eleven rows: every one lands within 0.98–1.00× of the size
+it drew before, on 2.7× to 7.6× the source pixels.
