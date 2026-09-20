@@ -64,6 +64,29 @@ PAGE = """<!DOCTYPE html>
   .cell { text-align:center; flex:0 0 auto; }
   .cap { color:var(--dim); font-size:11px; margin-top:6px;
     font-variant-numeric:tabular-nums; }
+  .strip { display:flex; gap:10px; align-items:center; margin-top:12px;
+    padding-top:12px; border-top:1px solid var(--line); flex-wrap:wrap; }
+  .strip input[type=range] { width:180px; }
+  .n { font-variant-numeric:tabular-nums; font-size:13px; min-width:74px; }
+  .step { padding:3px 9px; font-size:14px; line-height:1.2; }
+  .flagbox { display:flex; gap:6px; align-items:center; flex:1 1 260px; }
+  .flagbox input[type=text] { flex:1; min-width:120px; font:inherit; font-size:13px;
+    padding:5px 9px; border-radius:7px; border:1px solid var(--line);
+    background:var(--bg); color:var(--fg); }
+  .issues { margin-top:10px; display:flex; flex-direction:column; gap:4px; }
+  .issue { font-size:12px; color:var(--dim); display:flex; gap:8px; }
+  .issue b { color:var(--accent); font-weight:600; font-variant-numeric:tabular-nums; }
+  .flagged { outline:2px solid var(--accent); outline-offset:3px; border-radius:4px; }
+  .fx { margin-top:10px; padding-top:10px; border-top:1px dashed var(--line);
+    display:flex; flex-direction:column; gap:8px; }
+  .fxrow { display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+    font-size:13px; }
+  .fxname { font-weight:600; min-width:70px; }
+  .fxp { display:flex; gap:6px; align-items:center; color:var(--dim); font-size:12px; }
+  .fxp input[type=range] { width:108px; }
+  .fxv { font-variant-numeric:tabular-nums; min-width:56px; }
+  select { font:inherit; font-size:13px; padding:4px 8px; border-radius:7px;
+    border:1px solid var(--line); background:var(--card); color:var(--fg); }
   canvas { display:block; image-rendering:auto; }
   .good { color:var(--good); } .bad { color:var(--bad); }
   @media (max-width:640px){ .wrap{padding-left:16px;padding-right:16px;} }
@@ -123,7 +146,8 @@ for (const row of DATA.rows) {
   const el = document.createElement('div'); el.className = 'row';
   const head = document.createElement('div'); head.className = 'rowhead';
   head.innerHTML = `<span class="name">${row.name}</span>
-    <span class="meta">${row.frames.length} frames · source ${row.src_h}px tall
+    <span class="meta">${row.variants.map(v =>
+      `${v.label} ${v.frames.length}f @${v.ref_h}px`).join(' · ')}
     · baseline spread ${row.spread}px</span>`;
   el.appendChild(head);
   const stage = document.createElement('div'); stage.className = 'stage';
@@ -136,8 +160,139 @@ for (const row of DATA.rows) {
     stage.appendChild(cell);
     players.push({ canvas:c, cap, variant:v, row });
   }
-  el.appendChild(stage); host.appendChild(el);
+  el.appendChild(stage);
+
+  // Per-row transport. Rows have different frame counts, so stepping is per
+  // row rather than global -- "frame 3" only means something inside one row.
+  const n = row.variants[0].frames.length;
+  const strip = document.createElement('div'); strip.className = 'strip';
+  strip.innerHTML = `
+    <button class="step" title="Previous frame (\u2190)">&#9664;</button>
+    <input type="range" min="0" max="${n - 1}" value="0">
+    <button class="step" title="Next frame (\u2192)">&#9654;</button>
+    <span class="n"></span>
+    <span class="flagbox">
+      <input type="text" placeholder="What is wrong with this frame?">
+      <button>Flag</button>
+    </span>`;
+  const [prev, scrub, next, label] = [
+    strip.children[0], strip.children[1], strip.children[2], strip.children[3]];
+  const note = strip.querySelector('input[type=text]');
+  const flag = strip.querySelector('.flagbox button');
+
+  row.ui = { scrub, label, n, manual: false };
+  scrub.oninput = () => { row.ui.manual = true; setPlaying(false); };
+  prev.onclick = () => stepRow(row, -1);
+  next.onclick = () => stepRow(row, +1);
+  flag.onclick = async () => {
+    const body = { subject: DATA.subject, anim: row.name,
+                   frame: +scrub.value, note: note.value.trim() };
+    flag.disabled = true;
+    try {
+      const r = await fetch('/flag', { method:'POST',
+        headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      if (!r.ok) throw new Error(await r.text());
+      note.value = ''; DATA.issues.push(body); renderIssues(row, el);
+    } catch (e) { alert('Could not save the flag: ' + e.message); }
+    flag.disabled = false;
+  };
+
+  el.appendChild(strip);
+  renderIssues(row, el);
+  row.fx = JSON.parse(JSON.stringify(DATA.effects[row.name] || {}));
+  renderEffects(row, el);
+  host.appendChild(el);
 }
+
+function renderEffects(row, el){
+  let box = el.querySelector('.fx');
+  if (!box) { box = document.createElement('div'); box.className = 'fx';
+    el.appendChild(box); }
+  box.innerHTML = '';
+
+  for (const [name, values] of Object.entries(row.fx)) {
+    const def = DATA.catalogue.find(c => c.name === name); if (!def) continue;
+    const line = document.createElement('div'); line.className = 'fxrow';
+    line.innerHTML = `<span class="fxname" title="${def.help}">${name}</span>`;
+    for (const pd of def.params) {
+      const wrap = document.createElement('span'); wrap.className = 'fxp';
+      const step = (pd.high - pd.low) / 200;
+      wrap.innerHTML = `<label>${pd.name}</label>`;
+      const r = document.createElement('input');
+      r.type = 'range'; r.min = pd.low; r.max = pd.high; r.step = step;
+      r.value = values[pd.name];
+      const out = document.createElement('span'); out.className = 'fxv';
+      const show = () => out.textContent =
+        (+r.value).toFixed(pd.high <= 1 ? 3 : 2) + pd.unit;
+      r.oninput = () => { values[pd.name] = +r.value; show(); };
+      show(); wrap.appendChild(r); wrap.appendChild(out); line.appendChild(wrap);
+    }
+    const drop = document.createElement('button');
+    drop.textContent = 'Remove'; drop.className = 'step';
+    drop.onclick = () => { delete row.fx[name]; renderEffects(row, el); };
+    line.appendChild(drop);
+    box.appendChild(line);
+  }
+
+  const add = document.createElement('div'); add.className = 'fxrow';
+  const sel = document.createElement('select');
+  sel.innerHTML = '<option value="">add an effect…</option>' +
+    DATA.catalogue.filter(c => !row.fx[c.name])
+      .map(c => `<option value="${c.name}" title="${c.help}">${c.name}</option>`).join('');
+  sel.onchange = () => {
+    if (!sel.value) return;
+    const def = DATA.catalogue.find(c => c.name === sel.value);
+    row.fx[def.name] = Object.fromEntries(
+      def.params.map(p => [p.name, p.default]).concat([['phase', 'none']]));
+    renderEffects(row, el);
+  };
+  const save = document.createElement('button');
+  save.textContent = 'Save to art.yaml';
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      const r = await fetch('/effects', { method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ anim: row.name, effects: row.fx }) });
+      if (!r.ok) throw new Error(await r.text());
+      save.textContent = 'Saved';
+      setTimeout(() => save.textContent = 'Save to art.yaml', 1200);
+    } catch (e) { alert('Could not save: ' + e.message); }
+    save.disabled = false;
+  };
+  add.appendChild(sel); add.appendChild(save);
+  box.appendChild(add);
+}
+
+function renderIssues(row, el) {
+  let box = el.querySelector('.issues');
+  if (!box) { box = document.createElement('div'); box.className = 'issues';
+    el.appendChild(box); }
+  const mine = DATA.issues.filter(i => i.anim === row.name);
+  box.innerHTML = mine.map(i =>
+    `<div class="issue"><b>frame ${i.frame}</b><span>${
+      (i.note || '(no note)').replace(/[<>&]/g, c =>
+        ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</span></div>`).join('');
+}
+
+function stepRow(row, d){
+  setPlaying(false); row.ui.manual = true;
+  const n = row.ui.n;
+  row.ui.scrub.value = ((+row.ui.scrub.value + d) % n + n) % n;
+}
+
+function setPlaying(v){
+  playing = v; const b = document.getElementById('play');
+  b.setAttribute('aria-pressed', String(playing));
+  b.textContent = playing ? 'Pause' : 'Play';
+}
+
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'ArrowLeft')  { DATA.rows.forEach(r => stepRow(r, -1)); e.preventDefault(); }
+  if (e.key === 'ArrowRight') { DATA.rows.forEach(r => stepRow(r, +1)); e.preventDefault(); }
+  if (e.key === ' ') { setPlaying(!playing); e.preventDefault(); }
+});
 
 (async () => {
   for (const p of players)
@@ -145,11 +300,18 @@ for (const row of DATA.rows) {
   requestAnimationFrame(tick);
 })();
 
-let t0 = performance.now(), frame = 0, acc = 0;
+let t0 = performance.now(), acc = 0;
 function tick(now){
   const dt = now - t0; t0 = now;
-  if (playing) { acc += dt; while (acc > 1000 / fps) { acc -= 1000 / fps; frame++; } }
+  if (playing) {
+    acc += dt;
+    while (acc > 1000 / fps) { acc -= 1000 / fps;
+      for (const r of DATA.rows) if (r.ui)
+        r.ui.scrub.value = (+r.ui.scrub.value + 1) % r.ui.n; }
+  }
   for (const p of players) draw(p);
+  for (const r of DATA.rows) if (r.ui)
+    r.ui.label.textContent = `frame ${r.ui.scrub.value} / ${r.ui.n - 1}`;
   requestAnimationFrame(tick);
 }
 
@@ -158,7 +320,10 @@ function draw(p){
   const c = p.canvas, g = c.getContext('2d');
   const v = p.variant, frames = v.frames;
   if (!frames.length) return;
-  const f = frames[frame % frames.length];
+  const idx = p.row.ui ? +p.row.ui.scrub.value : 0;
+  const f = frames[idx % frames.length];
+  const flagged = DATA.issues.some(i => i.anim === p.row.name && i.frame === idx);
+  c.classList.toggle('flagged', flagged && v.label === 'candidate');
   // Exactly what the game does: one scale for the whole set, derived from the
   // reference frame, with lift applied per frame.
   const scale = (DATA.height_tiles * device.px) / v.ref_h;
@@ -169,16 +334,34 @@ function draw(p){
     c.style.width = cw + 'px'; c.style.height = ch + 'px'; }
   g.clearRect(0, 0, cw, ch);
   const baseY = ch - 10;
+  const fx = p.row.fx || {};
+  const T = performance.now() / 1000;
+  // Phase keeps identical props out of lockstep; in the preview the two
+  // variants share a phase so they can be compared honestly.
+  const wave = (e) => Math.sin(2 * Math.PI * e.hz * T + (e.phaseOffset || 0));
+  let sScale = 1, rot = 0, bobPx = 0, alpha = 1;
+  if (fx.breathe) sScale = 1 + fx.breathe.amount * wave(fx.breathe);
+  if (fx.sway)    rot = (fx.sway.degrees * Math.PI / 180) * wave(fx.sway);
+  if (fx.bob)     bobPx = fx.bob.amount * device.px * wave(fx.bob);
+  if (fx.throb)   alpha = 1 - fx.throb.amount * (0.5 + 0.5 * wave(fx.throb));
   if (showBase) { g.strokeStyle = 'rgba(184,51,106,.55)'; g.lineWidth = 1;
     g.beginPath(); g.moveTo(0, baseY + .5); g.lineTo(cw, baseY + .5); g.stroke(); }
   const x = (cw - w) / 2, y = baseY - h - lift;
   g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
-  g.drawImage(img, f[0], f[1], f[2], f[3], x, y, w, h);
+  g.save();
+  // Anchored at the feet: scale swells the sprite upward and rotation pivots
+  // where it meets the ground, so neither lifts it off.
+  g.translate(cw / 2, baseY - bobPx);
+  g.rotate(rot); g.scale(sScale, sScale);
+  g.translate(-cw / 2, -(baseY - bobPx));
+  g.globalAlpha = alpha;
+  g.drawImage(img, f[0], f[1], f[2], f[3], x, y - bobPx, w, h);
+  g.restore();
   if (showGrid) { g.strokeStyle = 'rgba(128,128,128,.5)';
     g.setLineDash([3,3]); g.strokeRect(x, y, w, h); g.setLineDash([]); }
   const up = (DATA.height_tiles * device.px) / v.ref_h;
-  p.cap.innerHTML = `${v.label} · <span class="${up > 1.05 ? 'bad' : 'good'}">`
-    + `${up.toFixed(1)}×</span>`;
+  p.cap.innerHTML = `${v.label} · frame ${idx % frames.length} · `
+    + `<span class="${up > 1.05 ? 'bad' : 'good'}">${up.toFixed(1)}×</span>`;
 }
 </script></body></html>
 """

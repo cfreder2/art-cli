@@ -670,3 +670,85 @@ A row that still cannot reach its count is returned short and marked
 `complete = False` rather than forced, and the preview prints which rows those
 are. Silently cutting a frame in a place the art does not contain would be
 worse than reporting that the sheet broke a rule.
+
+---
+
+# Frames you can step, flag, and animate procedurally
+
+## Stepping and numbers
+
+Rows have different frame counts, so "frame 3" only means something inside one
+row — transport is per row, not global. Each row gets a scrub slider, step
+buttons, and its number printed under **both** variants, so "frame 4 of jump"
+names the same thing in the preview, in `art issues` and in the prompt.
+
+Arrow keys step every row at once; space toggles play. Touching a scrub pauses,
+because you reached for it to look at something.
+
+## Flagging a bad frame
+
+The page is where a bad frame is actually noticed, so it is where the note is
+written. A flag POSTs to the preview's own server and lands in **art.yaml** —
+source, not build output, so it survives:
+
+```yaml
+frog:
+  issues:
+    - {anim: jump, frame: 4, note: back foot clipped at the ankle}
+```
+
+`art issues` lists them, `art issues frog --clear jump:4` drops one, and the
+next `art draw` folds them into the prompt as *"Fix these specifically and keep
+everything else identical — in the jump row, frame 4 (counting from 0): back
+foot clipped at the ankle."* A note written while looking at the frame reaches
+the generator without being retyped, and a flagged frame is outlined in the
+preview so it is findable again.
+
+## Retired animations
+
+`game.js:2502` can only ever select `sit`, `jump` or `idle` for Mr Frog. The
+other three are art nobody can reach:
+
+```yaml
+frog:
+  retired: [hurt, run, walk]
+```
+
+Retired rows are not previewed, not planned, and will not be packed. The pixels
+leave the atlas when `art pack` takes over — the current packer asserts that its
+row names match the rows it detects on the sheet, so it cannot simply be told to
+emit fewer.
+
+## Effects: motion without frames
+
+An effect is **metadata, not pixels**. A breathing idle costs one drawn frame
+and a line of YAML instead of six drawn frames, which matters when every frame
+comes out of a finite generation allowance — and a sine has no seam when it
+loops.
+
+AXI already does this by hand. The Frog King breathes at `game.js:2470`: *"he
+breathes rather than floats: the sprite is anchored at his feet, so a small
+pulse in scale swells him upwards and leaves him planted."* That comment is the
+design, and **anchoring is the whole of it** — a sprite that scales about its
+centre lifts off the ground, and a cattail that rotates about its middle
+detaches from the soil.
+
+| effect | anchor | for |
+| --- | --- | --- |
+| `breathe` | feet | a scale pulse; anything alive standing still |
+| `sway` | feet | rotation about the base; wind in a cattail, reed, tree |
+| `bob` | free | vertical float; a lily pad, a hovering enemy |
+| `throb` | free | opacity pulse; glow, an aura, something charging |
+
+The set is **closed**, like `kind`, because whatever draws the sprite has to
+implement it: an invented name would move in the preview and not in the game.
+Parameters are range-checked, so `amount: 9` is refused rather than producing a
+frog that inflates to fill the screen.
+
+`phase` keeps identical props out of lockstep — a row of cattails seeded from
+its x position reads as wind; the same row in unison reads as a texture.
+
+They are tuned **in the preview**, with a slider per parameter and a Save that
+writes back to art.yaml. That is the loop the whole tool is shaped around:
+generated art is expensive and slow, and everything that can be adjusted
+without regenerating should be adjustable while looking at it.

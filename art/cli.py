@@ -24,6 +24,7 @@ from art.measure import read_legacy
 from art.plan import plan_subject
 from art.refs import resolve as resolve_refs
 from art import draw as draw_mod
+from art import effects as fx_mod
 from art import seams as seams_mod
 from art.prompt import build as build_prompt
 from art import cut as cut_mod
@@ -496,6 +497,21 @@ def _sheet_for(prof, name):
         f"No sheet named {name!r}. `art plan --all` lists them.")
 
 
+def _issue_note(subject, sheet) -> str:
+    """Flagged frames, phrased as instructions for the next generation."""
+    rows = set(sheet.anims)
+    items = [i for i in (subject.raw.get("issues") or []) if i["anim"] in rows]
+    if not items:
+        return ""
+    parts = []
+    for i in items:
+        where = f"in the {i['anim']} row, frame {i['frame']} (counting from 0)"
+        parts.append(f"{where}: {i['note']}" if i.get("note")
+                     else f"{where} needs redrawing")
+    return ("Fix these specifically and keep everything else identical -- "
+            + "; ".join(parts) + ".")
+
+
 def _groups_or_empty(prof):
     try:
         return read_legacy(_atlas_path(prof))
@@ -536,6 +552,11 @@ def draw(ctx, sheet, note, model, dry_run) -> None:
     prof = _load(ctx.obj["project"])
     subject, sh, pl = _sheet_for(prof, sheet)
     refs = resolve_refs(prof, subject)
+    flagged = _issue_note(subject, sh)
+    if flagged:
+        note = (note + " " if note else "") + flagged
+        console.print(f"[dim]carrying {len(subject.raw.get('issues') or [])} "
+                      f"flagged frame(s) into the prompt[/dim]")
     text = build_prompt(prof, subject, sh, pl, refs, note)
     out, n = draw_mod.next_candidate(prof.root / "art" / "candidates", sh.name)
 
@@ -619,8 +640,11 @@ def view(ctx, subject, candidate, port, no_open) -> None:
         if img.is_file():
             images["today.png"] = img
             ref = None
+            retired = set(sub.raw.get("retired") or [])
             for anim_name, anim in group.anims.items():
                 short = anim_name[len(prefix):] if prefix else anim_name
+                if short in retired:
+                    continue
                 frames = [[f.x, f.y, f.w, f.h, f.lift] for f in anim.frames]
                 if ref is None or short == "idle":
                     ref = anim.frames[0].h
@@ -667,7 +691,16 @@ def view(ctx, subject, candidate, port, no_open) -> None:
                      "spread": max(f[4] for f in first["frames"]),
                      "variants": variants})
 
+    try:
+        normalised = fx_mod.normalise(sub.raw.get("effects") or {})
+    except fx_mod.EffectError as exc:
+        raise click.ClickException(f"art.yaml effects: {exc}") from exc
+
     data = {"devices": view_mod.device_list(),
+            "subject": subject,
+            "issues": list(sub.raw.get("issues") or []),
+            "effects": {r["name"]: fx_mod.for_anim(normalised, r["name"]) for r in rows},
+            "catalogue": fx_mod.catalogue(),
             "height_tiles": sub.height_tiles or 1.0, "rows": rows}
     view_mod.build(serve, f"{subject}",
                    f"{len(rows)} animations · {sub.height_tiles or 1.0} tiles tall "
@@ -676,6 +709,66 @@ def view(ctx, subject, candidate, port, no_open) -> None:
     class Handler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *a, **k): super().__init__(*a, directory=str(serve), **k)
         def log_message(self, *a): pass
+
+        def _body(self):
+            size = int(self.headers.get("Content-Length") or 0)
+            return __import__("json").loads(self.rfile.read(size) or b"{}")
+
+        def do_POST(self):
+            """Write back to art.yaml.
+
+            The page is where a bad frame is noticed and where a sway is tuned,
+            so it is where both are recorded -- into art.yaml, which is source,
+            so they survive, show up in `art issues`, and reach the generator.
+            """
+            if self.path == "/effects":
+                self._save_effects(); return
+            if self.path != "/flag":
+                self.send_error(404); return
+            try:
+                body = self._body()
+                anim, frame = str(body["anim"]), int(body["frame"])
+                note = str(body.get("note") or "").strip()
+            except Exception as exc:
+                self.send_error(400, f"bad flag: {exc}"); return
+
+            issues = list(sub.raw.get("issues") or [])
+            issues = [i for i in issues
+                      if not (i.get("anim") == anim and i.get("frame") == frame)]
+            issues.append({"anim": anim, "frame": frame, "note": note})
+            issues.sort(key=lambda i: (i["anim"], i["frame"]))
+            sub.raw["issues"] = issues
+            profile_mod.save(prof)
+            console.print(f"[yellow]flagged[/yellow] {subject}/{anim} frame {frame}"
+                          + (f" — {note}" if note else ""))
+            self.send_response(204); self.end_headers()
+
+        def _save_effects(self):
+            try:
+                body = self._body()
+                anim = str(body["anim"])
+                given = body.get("effects") or {}
+                # Strip what the tool fills in, so art.yaml keeps only what was
+                # actually chosen and a later default change still reaches it.
+                trimmed = {
+                    name: {k: v for k, v in vals.items()
+                           if k != "anchor" and not (k == "phase" and v == "none")}
+                    for name, vals in given.items()
+                }
+                fx_mod.normalise({anim: trimmed})
+            except Exception as exc:
+                self.send_error(400, str(exc)); return
+
+            block = dict(sub.raw.get("effects") or {})
+            if trimmed:
+                block[anim] = trimmed
+            else:
+                block.pop(anim, None)
+            sub.raw["effects"] = block
+            profile_mod.save(prof)
+            names = ", ".join(trimmed) or "none"
+            console.print(f"[green]effects saved[/green] {subject}/{anim}: {names}")
+            self.send_response(204); self.end_headers()
 
     socketserver.TCPServer.allow_reuse_address = True
     try:
@@ -697,3 +790,99 @@ def view(ctx, subject, candidate, port, no_open) -> None:
             httpd.serve_forever()
         except KeyboardInterrupt:
             console.print("[dim]stopped[/dim]")
+
+
+# -------------------------------------------------------------- issues --
+
+@main.command()
+@click.argument("subject", required=False)
+@click.option("--clear", "clear_spec", metavar="ANIM[:FRAME]",
+              help="Drop flags for an animation, or one frame of it.")
+@click.pass_context
+def issues(ctx, subject, clear_spec) -> None:
+    """Frames flagged in the preview as wrong.
+
+    These ride along as art direction the next time the sheet is drawn, so a
+    note written while looking at a bad frame reaches the generator.
+    """
+    prof = _load(ctx.obj["project"])
+    names = [subject] if subject else list(prof.subjects)
+    if subject and subject not in prof.subjects:
+        raise click.ClickException(f"Unknown subject: {subject}")
+
+    if clear_spec:
+        if not subject:
+            raise click.UsageError("Name the subject whose flags to clear.")
+        anim, _, frame = clear_spec.partition(":")
+        sub = prof.subjects[subject]
+        kept = [i for i in (sub.raw.get("issues") or [])
+                if not (i["anim"] == anim and (not frame or i["frame"] == int(frame)))]
+        dropped = len(sub.raw.get("issues") or []) - len(kept)
+        sub.raw["issues"] = kept
+        profile_mod.save(prof)
+        console.print(f"[green]cleared {dropped} flag(s)[/green] on {subject}/{clear_spec}")
+        return
+
+    table = Table(header_style="bold")
+    table.add_column("subject"); table.add_column("animation")
+    table.add_column("frame", justify="right"); table.add_column("note")
+    total = 0
+    for name in names:
+        for i in sorted(prof.subjects[name].raw.get("issues") or [],
+                        key=lambda i: (i["anim"], i["frame"])):
+            table.add_row(name, i["anim"], str(i["frame"]),
+                          i.get("note") or "[dim](no note)[/dim]")
+            total += 1
+    if not total:
+        console.print("[green]No flagged frames.[/green]")
+        return
+    console.print(table)
+    console.print(f"[dim]{total} flagged — they become art direction on the next "
+                  f"`art draw`.[/dim]")
+
+
+# ------------------------------------------------------------- effects --
+
+@main.command(name="effects")
+@click.argument("subject", required=False)
+@click.pass_context
+def effects_cmd(ctx, subject) -> None:
+    """Procedural motion applied at draw time, and what is available.
+
+    An effect is metadata, not pixels: a breathing idle costs one drawn frame
+    and a line of YAML instead of six drawn frames. Tune them live in
+    `art view`, which saves back here.
+    """
+    prof = _load(ctx.obj["project"])
+    names = [subject] if subject else list(prof.subjects)
+    if subject and subject not in prof.subjects:
+        raise click.ClickException(f"Unknown subject: {subject}")
+
+    table = Table(header_style="bold", title="In use")
+    table.add_column("subject"); table.add_column("applies to")
+    table.add_column("effect"); table.add_column("settings")
+    used = 0
+    for name in names:
+        sub = prof.subjects[name]
+        try:
+            normalised = fx_mod.normalise(sub.raw.get("effects") or {})
+        except fx_mod.EffectError as exc:
+            raise click.ClickException(f"{name}: {exc}") from exc
+        for anim, effects in normalised.items():
+            for fx_name, values in effects.items():
+                shown = " ".join(f"{k}={v}" for k, v in values.items()
+                                 if k not in ("anchor",))
+                table.add_row(name, anim, fx_name, shown); used += 1
+    if used:
+        console.print(table)
+    else:
+        console.print("[dim]No effects set.[/dim]")
+
+    cat = Table(header_style="bold", title="Available")
+    cat.add_column("effect"); cat.add_column("anchor", style="dim")
+    cat.add_column("parameters"); cat.add_column("what it is for")
+    for e in fx_mod.catalogue():
+        cat.add_row(e["name"], e["anchor"],
+                    ", ".join(f'{p["name"]} ({p["low"]}–{p["high"]}{p["unit"]})'
+                              for p in e["params"]), e["help"])
+    console.print(cat)
