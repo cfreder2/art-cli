@@ -492,3 +492,59 @@ different role: the accepted sheet goes in as `revise`, the prompt names only
 the new row, and everything else is told to stay identical. That is how twelve
 separate generations stay one character — and `plan` prints a warning when a
 subject would be generated with nothing attached at all.
+
+---
+
+# Seamless edges, and what the real art said about them
+
+Terrain is drawn edge to edge and then repeated, so the right column has to
+continue into the left column of the next copy. A seam is the most visible art
+bug there is, because it is *regular* — it draws a grid across the ground.
+
+Testing it by comparing the two edge columns for equality is wrong: painterly
+art is never equal anywhere, so a tile that wrapped perfectly would fail. What
+matters is whether the step **at the wrap** is bigger than the steps the image
+makes everywhere else. So the wrap difference is scored against the tile's own
+median column-to-column difference. About 1× reads as continuous; large is a
+line.
+
+## The axis, which the data forced
+
+The first version scored both wraps for every tile, and AXI's ground came back
+as a catastrophic failure — 11× on the vertical. It was right about the pixels
+and wrong about the art: a ground tile has grass on top and dirt underneath. It
+repeats sideways and is never stacked, so its vertical "seam" is the drawing
+working correctly.
+
+So `seamless` takes an axis, and only `both` means both:
+
+```yaml
+ground: {seamless: horizontal}   # repeats sideways, never stacked
+water:  {seamless: both}         # stacked in columns as well
+tree:   {}                       # decor does not tile at all
+```
+
+Pointed at what AXI ships today, with the axes set:
+
+| tile | h-wrap | v-wrap | |
+| --- | --- | --- | --- |
+| grass | 0.4× | — | seamless |
+| ground | 2.8× | — | soft seam |
+| ground_alt | 5.4× | — | **SEAM** |
+| ground_wide | 6.3× | — | **SEAM** |
+| water | 1.0× | 14.8× | **SEAM** (it is stacked in columns) |
+
+A transparent margin is reported separately, because a tile that does not fill
+its cell leaves a gap that reads as a seam even when the art itself wraps.
+
+## Style benchmarks
+
+`style_ref` is project-level and every prompt carries it. For AXI it is Masie's
+sheet, Sir Croaks' and Mr Frog's — the three the author names as the look.
+
+That created the first bug the tool found in itself. `npc_sheet.png` is both a
+style benchmark *and* the only statement of who Mr Frog is, and de-duplicating
+by path silently dropped the second role: the frog's redraw would have gone out
+with no identity reference at all. Roles now have precedence — `revise` over
+`identity` over `pose` over `style` — because telling a model to ignore the
+subject of the very image it is drawing from is worse than attaching nothing.

@@ -58,9 +58,6 @@ class SheetPlan:
     def frames(self) -> int:
         return self.cols * self.rows
 
-    @property
-    def gutter_ok(self) -> bool:
-        return self.cell_w - self.min_drawn >= MIN_GUTTER_PX or self.cell_w >= self.min_drawn
 
 
 @dataclass

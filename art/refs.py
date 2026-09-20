@@ -29,6 +29,12 @@ from art.profile import Profile, Subject
 
 ROLES = ("style", "identity", "revise", "pose")
 
+# When one file arrives under two roles, the more specific one wins. Sir
+# Croaks' sheet is a style benchmark for the whole game AND the statement of
+# who Sir Croaks is; attaching it twice wastes an image slot, and letting
+# "style" win would tell the model to ignore the very subject it is drawing.
+ROLE_PRIORITY = {"style": 0, "pose": 1, "identity": 2, "revise": 3}
+
 # What the prompt says about each role, once the images are numbered.
 ROLE_INSTRUCTION = {
     "style": "match its brushwork, palette, line weight and outline; "
@@ -62,7 +68,7 @@ def resolve(
     because it applies to the whole image, then identity, then the sheet under
     revision, then poses.
     """
-    found: list[Reference] = []
+    by_path: dict[Path, str] = {}
     root = profile.root
 
     def add(role: str, raw) -> None:
@@ -71,8 +77,11 @@ def resolve(
         for item in ([raw] if isinstance(raw, (str, Path)) else list(raw)):
             p = Path(item)
             p = p if p.is_absolute() else root / p
-            if p.exists() and not any(r.path == p for r in found):
-                found.append(Reference(role, p))
+            if not p.exists():
+                continue
+            held = by_path.get(p)
+            if held is None or ROLE_PRIORITY[role] > ROLE_PRIORITY[held]:
+                by_path[p] = role
 
     add("style", profile.raw.get("style_ref"))
 
@@ -85,12 +94,16 @@ def resolve(
 
     # A subject still on its old art is its own best identity reference, and
     # forgetting to pass it is how a redraw comes back as a different frog.
-    if not any(r.role == "identity" for r in found) and subject.state == "legacy":
+    if "identity" not in by_path.values() and subject.state == "legacy":
         add("identity", (subject.raw.get("source") or {}).get("sheet"))
 
     for role, paths in (extra or {}).items():
         add(role, paths)
-    return found
+
+    # Order is the numbering the prompt depends on: style first because it
+    # applies to the whole image, then who it is, then what is being changed.
+    return sorted((Reference(role, path) for path, role in by_path.items()),
+                  key=lambda r: (ROLES.index(r.role), r.path.name))
 
 
 def prompt_block(references: list[Reference]) -> str:
