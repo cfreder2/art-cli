@@ -874,3 +874,33 @@ character being drawn.
 
 288–302px tall against a 240px minimum, every frame's lowest point within 3px
 of the shared baseline, four legs under her, belly off the ground, and pink.
+
+## Getting a character back after a redraw drifts
+
+The walk was right and the character was not: a pronounced muzzle where there
+had been a flat round snout, blue migrated from the tail fin onto the gills,
+and four outlined toes where there had been soft rounded stubs.
+
+Three changes fixed it, and only the first is about the description.
+
+**Say the features, not the species.** "A young axolotl" leaves the face to the
+generator. The description now pins the snout shape, states that the nose is a
+dot, names the gill colours and says **NO BLUE ON THEM AT ALL -- blue appears
+only on her tail fin**, and asks for feet "like little mittens", explicitly
+without separated toes or claws. A negative is worth stating when the drift has
+already happened once.
+
+**A subject can replace or drop the project's style anchors.** Masie was pointed
+at Sir Croaks, who is bold flat cartoon with a heavy black outline. Her own art
+is soft, airbrushed and thinly outlined. The style anchor was pulling her away
+from herself, so `style_ref: []` plus a per-subject `style` string lets her own
+identity reference carry the rendering -- and the `identity` instruction now
+says it covers **how she is drawn**, not only who she is.
+
+**`pose` is how a good result survives a bad one.** The second candidate had the
+gait right and the face wrong. Passing it as `pose` keeps the walk while
+identity and the description rebuild the character, so the fix does not cost
+the thing that already worked. That only holds because the role instruction is
+specific: *layout and posing only -- not the colours, not the facial features,
+not the proportions.* A reference with no stated job would have carried the
+mistakes straight back in.

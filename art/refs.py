@@ -39,13 +39,18 @@ ROLE_PRIORITY = {"style": 0, "pose": 1, "identity": 2, "revise": 3}
 ROLE_INSTRUCTION = {
     "style": "match its brushwork, palette, line weight and outline; "
              "do not copy its subject or composition",
-    "identity": "this is WHO the character is. Keep the colours, markings, "
-                "proportions and costume exactly. Do NOT copy its poses, its "
-                "framing or its resolution -- the poses are specified above, and "
-                "where they differ from this image the description wins",
+    "identity": "this is WHO the character is, AND how she is drawn. Keep the "
+                "colours, markings, proportions, costume and the rendering -- "
+                "line weight, shading, how soft or hard the edges are. Do NOT "
+                "copy its poses, its framing or its resolution: the poses are "
+                "specified above, and where they differ from this image the "
+                "description wins",
     "revise": "this is the sheet being changed. Keep every row not named below "
               "identical, including costume and palette",
-    "pose": "follow this layout and posing",
+    "pose": "follow its LAYOUT and POSING only -- the gait, the timing, where "
+            "each limb is in each frame. Take nothing else from it: not the "
+            "colours, not the facial features, not the proportions. Those come "
+            "from the identity image and the description",
 }
 
 
@@ -89,7 +94,14 @@ def resolve(
     # pointed at the very character being drawn. Identity covers it instead.
     own = (subject.raw.get("source") or {}).get("sheet")
     own_path = (root / own).resolve() if own else None
-    for candidate in (profile.raw.get("style_ref") or []):
+    # A subject may replace the project's style anchors, or drop them entirely
+    # with `style_ref: []`. A character whose own art defines the house style
+    # is better served by its identity reference than by another character's
+    # sheet pulling it somewhere else.
+    declared_style = subject.raw.get("style_ref")
+    anchors = (profile.raw.get("style_ref") or []) if declared_style is None \
+        else declared_style
+    for candidate in anchors:
         c = Path(candidate)
         c = c if c.is_absolute() else root / c
         if own_path and c.resolve() == own_path:

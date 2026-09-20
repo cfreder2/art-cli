@@ -66,3 +66,35 @@ def test_a_subject_is_never_its_own_style_reference(game):
 def test_missing_files_are_skipped_rather_than_promised(game):
     prof = _profile(game, style_ref=["gone.png"])
     assert resolve(prof, Subject("x", raw={})) == []
+
+
+def test_a_subject_can_replace_the_project_style_anchors(game):
+    """Masie's own art is softer than the game's bolder characters. Anchoring
+    her to Sir Croaks pulled her toward a harder, flatter look than she has."""
+    prof = _profile(game, style_ref=["croaks.png"])
+    masie = Subject("masie", raw={"style_ref": ["style.png"]})
+    assert [(r.role, r.path.name) for r in resolve(prof, masie)] == [("style", "style.png")]
+
+
+def test_a_subject_can_drop_the_style_anchors_entirely(game):
+    prof = _profile(game, style_ref=["croaks.png"])
+    masie = Subject("masie", state="legacy",
+                    raw={"style_ref": [], "source": {"sheet": "frog.png"}})
+    assert [r.role for r in resolve(prof, masie)] == ["identity"]
+
+
+def test_identity_carries_the_rendering_when_it_is_the_only_anchor(game):
+    prof = _profile(game)
+    masie = Subject("masie", state="legacy", raw={"source": {"sheet": "frog.png"}})
+    block = prompt_block(resolve(prof, masie))
+    assert "how she is drawn" in block and "line weight" in block
+
+
+def test_pose_takes_nothing_but_the_posing(game):
+    """The pose reference is a previous candidate: it has the right gait and
+    the wrong face, so it must not contribute anything else."""
+    prof = _profile(game)
+    masie = Subject("masie", raw={"reference": {"pose": "style.png"}})
+    block = prompt_block(resolve(prof, masie))
+    assert "LAYOUT and POSING only" in block
+    assert "not the facial features" in block

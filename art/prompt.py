@@ -96,8 +96,9 @@ def build(
         "Constraints:",
         rules,
     ]
-    if profile.style:
-        parts += ["", f"Style: {profile.style}"]
+    style = subject.raw.get("style", profile.style)
+    if style:
+        parts += ["", f"Style: {style}"]
     block = prompt_block(references)
     if block:
         parts += ["", block]
