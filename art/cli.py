@@ -30,6 +30,7 @@ from art import seams as seams_mod
 from art import pack as pack_mod
 from art import review as review_mod
 from art import rules as rules_mod
+from art import scene as scene_mod
 from art import seamless as seamless_mod
 from art import template as tpl_mod
 from art.prompt import build as build_prompt
@@ -1701,3 +1702,108 @@ def review(ctx, sheet, source, do_flag, model, dry_run) -> None:
     profile_mod.save(prof)
     console.print(f"[green]flagged {added} frame(s)[/green] "
                   f"[dim]— they ride into the next `art draw {sh.name}`[/dim]")
+
+
+# ---------------------------------------------------------------- scene --
+
+@main.command()
+@click.option("--port", default=8733, show_default=True)
+@click.option("--no-open", "no_open", is_flag=True, help="Serve, but do not open a browser.")
+@click.pass_context
+def scene(ctx, port, no_open) -> None:
+    """Preview terrain, props and sky the way a landscape is seen.
+
+    `view` is built for animation. None of the questions you ask about
+    landscape art fit that shape: a tile's question is what happens when it
+    REPEATS, a prop's is how big it is beside the character, and a band's is
+    whether it seams across a whole screen. So this composes them instead, from
+    the packed atlas -- what ships is what matters.
+    """
+    import http.server, socketserver, tempfile, threading, webbrowser
+    import numpy as np
+    from PIL import Image
+
+    prof = _load(ctx.obj["project"])
+    atlas_json = _atlas_path(prof)
+    raw = __import__("json").loads(atlas_json.read_text())
+    image = atlas_json.parent / (raw.get("image") or "atlas.png")
+    if not image.is_file():
+        raise click.ClickException(f"Atlas image not found: {image}. Run `art pack`.")
+    px = np.asarray(Image.open(image).convert("RGBA"))
+    entries = raw.get("tiles") or {}
+
+    def rect(name):
+        f = entries.get(name)
+        return None if not f else {"x": f[0], "y": f[1], "w": f[2], "h": f[3]}
+
+    tiles, props, bands = [], [], []
+    for name, subject in prof.subjects.items():
+        if subject.state == "retired":
+            continue
+        for sh in (subject.sheets or {}).values():
+            keys = sh.get("anims") if isinstance(sh, dict) else sh
+            for key in keys or []:
+                r = rect(key)
+                if not r:
+                    continue
+                # Size is per ENTRY, not per group: a group shares a material,
+                # not a width. A tree is 3.6 tiles across and a gem is 0.6.
+                note = (subject.raw.get("anims") or {}).get(key) or {}
+                note = note if isinstance(note, dict) else {}
+                tall = note.get("tiles_tall") or subject.raw.get("height_tiles_drawn")
+                if tall:
+                    bands.append({**r, "name": key, "tilesTall": tall,
+                                  "speed": 0.35 if key == "hill" else 1.0})
+                elif subject.kind == "tile":
+                    crop = px[r["y"]:r["y"] + r["h"], r["x"]:r["x"] + r["w"]]
+                    axis = subject.raw.get("seamless") or "both"
+                    got = seams_mod.score(crop[..., :3], crop[..., 3],
+                                          seams_mod.axes_for(axis))
+                    tiles.append({**r, "name": key, "seamless": str(axis),
+                                  "seam": max(s.ratio for s in got)})
+                else:
+                    props.append({**r, "name": key,
+                                  "tiles": float(note.get("width_tiles")
+                                                 or subject.raw.get("width_tiles")
+                                                 or 1.0)})
+
+    if not (tiles or props or bands):
+        raise click.ClickException(
+            "No terrain in this project. `art pack` first, or check art.yaml.")
+
+    hero = (raw.get("axi") or {}).get("idle")
+    ground = rect("ground") or (tiles[0] if tiles else None)
+    data = {
+        "devices": view_mod.device_list(),
+        "tiles": sorted(tiles, key=lambda t: t["name"]),
+        "props": sorted(props, key=lambda p: -p["tiles"]),
+        "bands": bands,
+        "ground": ground,
+        "hero": ({"x": hero[0][0], "y": hero[0][1], "w": hero[0][2], "h": hero[0][3]}
+                 if hero else None),
+    }
+
+    serve = Path(tempfile.mkdtemp(prefix="art-scene-"))
+    scene_mod.build(serve, "landscape",
+                    f"{len(tiles)} tiles \u00b7 {len(props)} props \u00b7 "
+                    f"{len(bands)} sky bands, from {image.name}", data, image)
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **k): super().__init__(*a, directory=str(serve), **k)
+        def log_message(self, *a): pass
+
+    socketserver.TCPServer.allow_reuse_address = True
+    try:
+        httpd = socketserver.TCPServer(("127.0.0.1", port), Handler)
+    except OSError as exc:
+        raise click.ClickException(
+            f"Port {port} is already in use. Try `--port {port + 1}`.") from exc
+    with httpd:
+        url = f"http://127.0.0.1:{port}/"
+        console.print(f"[green]scene[/green] {url}  [dim]ctrl-c to stop[/dim]")
+        if not no_open:
+            threading.Timer(0.3, lambda: webbrowser.open(url)).start()
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            console.print("[dim]stopped[/dim]")

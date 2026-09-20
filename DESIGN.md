@@ -1629,3 +1629,35 @@ Three of them, each caught by the gate refusing a sheet:
   the backdrop that keying took it too, so that is what is measured now. And it
   measures the KEYED art, not the plate, where every antialiased edge is a blend
   with the backdrop by definition.
+
+---
+
+# `scene`: previewing a landscape as a landscape
+
+`view` is built for animation — rows of frames playing at device sizes — and
+none of the questions you ask about terrain fit that shape:
+
+| | its one frame tells you nothing about | so `scene` shows |
+| --- | --- | --- |
+| a tile | what happens when it **repeats** | a 3-row field of it, with the tile edges toggleable |
+| a prop | how big it is **beside the character** | it standing on real ground at its width in tiles, Masie ghosted in at 1.15 |
+| a band | whether it seams across a **screen** | it repeated across a screen width, drifting at its parallax speed |
+
+A seam is invisible in one tile and obvious in a field, which is the whole
+point: the check reports `ground_alt` at 2.5x and this is where you decide
+whether 2.5x is a line you can see.
+
+It reads the **packed atlas**, not the sheets. What ships is what matters, and
+the packer is where tiles are made seamless and where compression can undo it —
+previewing the sheets would show a seam that the atlas does not have, or hide
+one it does.
+
+## Size is a fact about an entry, not a group
+
+Grouping terrain by material — so a dirt matches its own ground — put a width
+on the group, and every prop came back 1.0 tiles wide while the sky bands
+vanished entirely. A group shares a material, a palette and a light direction.
+It does not share a size: a tree is 3.6 tiles across and a gem is 0.6.
+
+So `width_tiles` and `tiles_tall` live on the entry, beside its description,
+and `scene` falls back to the group only when an entry does not say.
