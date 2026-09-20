@@ -943,3 +943,69 @@ The lesson is that a proportion note belongs beside a posture note: telling a
 character to stand up will make it taller unless the description also says how
 long and how low it is. Aspect ratio is cheap to measure off the identity
 reference and is the number that catches it.
+
+---
+
+# Animating a character that is not a mammal
+
+Masie's run took seven generations. Most of them failed for reasons worth
+writing down, because none of them were about image quality.
+
+## Name the animal, then check the gait against it
+
+"A four-legged walk cycle" produced a mammal. Salamanders do not move like
+mammals, and the differences are all things a description can state:
+
+- **Limbs SPRAWL.** The upper leg comes out sideways and bends down at elbow
+  and knee. Not tucked vertically underneath like a dog's — which is what
+  "legs underneath her carrying her weight" asked for, and got.
+- **No flight phase.** Salamanders never bound and never have all four feet off
+  the ground. An early attempt asked for an airborne frame; that is a gallop,
+  and gallops belong to animals with a flexible spine in the vertical plane.
+- **The body does the work.** A travelling wave of lateral undulation, short
+  limbs, short stride. The tail counterbalances the trunk's bend.
+
+## The trap: a real gait can be invisible
+
+A salamander trots — diagonal pairs, so the second half of the cycle is the
+mirror of the first. **A mirrored pose looks identical from the side.** Half of
+a correctly-specified trot is visually redundant in a side-scroller, which is
+exactly why the accurate version read as a shuffle.
+
+Worse, the characteristic salamander motion is *lateral*, and lateral motion
+does not exist in a side view at all.
+
+So biomechanical accuracy and side-view readability pull against each other,
+and the resolution is to keep the anatomy and restructure the cycle around the
+one thing a side view can show: **body length**. One continuous wave from most
+bunched to fully stretched and back, every frame a different length, explicitly
+*not* two mirrored halves.
+
+Stated that way, frame widths went from 390, 390, 391, 394, 390, 387 — six
+drawings of one pose — to **304, 381, 473, 375, 353, 330**.
+
+## Per-frame poses
+
+A general description of a cycle produces a general cycle. `anims` takes a
+`summary` plus a `frames` list, and each frame is named for what it *is* —
+GATHER, UNCOILING, FULLY STRETCHED — with the closing instruction that if two
+frames could be swapped without anyone noticing, the cycle is wrong.
+
+This is the only lever that reliably changed the result. Everything else —
+references, style, constraints — held the character steady; only naming the
+poses made it move.
+
+## A constraint can flatten the thing it protects
+
+"All four legs in every frame" was added to stop limbs vanishing. It worked,
+and it also halved the motion: the model satisfied it by drawing the legs in
+the same place every time. The rule now says so explicitly — *this is about
+never LOSING a limb; it is not a reason to draw them in the same place. Each
+frame's pose governs where they go.*
+
+## Known: a wrapped grid can drift between rows
+
+Laying one animation across a grid risks the second row being treated as a
+separate drawing. Masie's frames 4–6 came back slightly chunkier, with a
+different tail treatment, than 1–3. Worth watching; a single row would not have
+this problem, and cannot fit her.

@@ -41,14 +41,35 @@ SHEET_RULES = [
     "Every frame faces the SAME direction: {facing}. Do not draw a turnaround "
     "or a mirrored set -- the game flips the sprite itself.",
     "Align every frame to that same invisible groundline, so the animation "
-    "does not bob when it plays.",
+    "does not bob when it plays -- unless a pose is "
+    "explicitly described as airborne, which sits above it.",
     "EVERY limb the character has appears in EVERY frame. A four-legged "
     "character shows FOUR legs in all of them. Never drop, merge or hide a "
     "limb behind the body because it overlaps -- draw the far-side limbs in a "
     "slightly DARKER shade of the same colour so they read as being behind, "
-    "and keep their outline. A limb that vanishes for one frame is a limb that "
-    "flickers when the row is animated.",
+    "and keep their outline. This is about never LOSING a limb; it is not a "
+    "reason to draw the limbs in the same place each time. Each frame's pose "
+    "governs where they go.",
 ]
+
+
+def _per_frame(note, count: int) -> list[str]:
+    """Pose-by-pose direction, when the profile gives it.
+
+    A general description of a cycle produces a general cycle: six drawings of
+    roughly one pose. Naming what each frame is -- gather, push, stretch, land
+    -- is the difference between an animation and a twitch, and it is the only
+    lever that reliably moves the measured frame-to-frame change.
+    """
+    poses = note.get("frames") if isinstance(note, dict) else None
+    if not poses:
+        return []
+    lines = ["  Each frame is a DISTINCTLY different pose, in this order:"]
+    for i, pose in enumerate(poses[:count], 1):
+        lines.append(f"    Frame {i}: {pose}")
+    lines.append("  Neighbouring frames must not look alike. If two frames could "
+                 "be swapped without anyone noticing, the cycle is wrong.")
+    return lines
 
 
 def build(
@@ -63,19 +84,23 @@ def build(
     anim_notes = subject.raw.get("anims") or {}
     if sheet.wrapped:
         only = sheet.anims[0]
+        note = anim_notes.get(only, "a " + only + " cycle")
+        summary = note.get("summary", "") if isinstance(note, dict) else note
         described = [
             f"  ONE continuous {sheet.wrapped}-frame {only} cycle, laid out "
             f"{sheet.cols} across and {sheet.rows} down. Read it left to right "
             f"along the top row, then continue on the next row — frame "
             f"{sheet.cols + 1} sits below frame 1.",
-            f"  {only} — {anim_notes.get(only, 'a ' + only + ' cycle')}",
+            f"  {only} — {summary}",
         ]
+        described += _per_frame(note, sheet.wrapped)
     else:
-        described = [
-            f"  Row {i}: {name} — {anim_notes.get(name, 'a ' + name + ' cycle')}"
-            f" ({sheet.cols} frames)"
-            for i, name in enumerate(sheet.anims, 1)
-        ]
+        described = []
+        for i, name in enumerate(sheet.anims, 1):
+            note = anim_notes.get(name, "a " + name + " cycle")
+            summary = note.get("summary", "") if isinstance(note, dict) else note
+            described.append(f"  Row {i}: {name} — {summary} ({sheet.cols} frames)")
+            described += ["  " + line for line in _per_frame(note, sheet.cols)]
 
     from art.profile import backdrop_for
     rules = "\n".join(
