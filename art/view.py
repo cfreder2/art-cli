@@ -117,6 +117,7 @@ PAGE = """<!DOCTYPE html>
     <span class="meta" id="fpsv">8 fps</span></div>
   <div class="group">
     <select id="addver"></select>
+    <button id="sync" aria-pressed="true" title="Every version completes its loop in the same time, whatever its frame count">Sync speed</button>
     <button id="base" aria-pressed="false">Baseline</button>
     <button id="grid" aria-pressed="false">Frame box</button>
     <button id="play" aria-pressed="true">Pause</button>
@@ -127,7 +128,7 @@ PAGE = """<!DOCTYPE html>
 <script>
 const DATA = __DATA__;
 let device = DATA.devices.find(d => d.px === 192) || DATA.devices[0];
-let fps = 8, showBase = false, showGrid = false, playing = true;
+let fps = 8, showBase = false, showGrid = false, playing = true, sync = true;
 
 const images = {};
 function load(src){ return new Promise(r => { const i = new Image();
@@ -149,6 +150,7 @@ document.getElementById('fps').oninput = e => {
 const toggle = (id, set) => { const b = document.getElementById(id);
   b.onclick = () => { const v = b.getAttribute('aria-pressed') !== 'true';
     b.setAttribute('aria-pressed', String(v)); set(v); }; };
+toggle('sync', v => sync = v);
 toggle('base', v => showBase = v);
 toggle('grid', v => showGrid = v);
 document.getElementById('play').onclick = () => { playing = !playing;
@@ -201,6 +203,15 @@ function addCell(row){
   c.onclick = () => openEditor(row, v);
   row.stage.appendChild(cell);
   players.push({ canvas:c, cap, variant:v, row });
+  // A longer version makes the scrub finer, so its frames are all reachable.
+  const n = Math.max(...row.variants.map(x => x.frames.length));
+  if (n !== row.ui.n) {
+    row.ui.n = n; row.ui.scrub.max = n - 1;
+    row.ui.scrub.value = Math.floor(row.ui.phase * n);
+  }
+  const head = row.el.querySelector('.rowhead .meta');
+  if (head) head.textContent = row.variants.map(x =>
+    `${x.label} ${x.frames.length}f @${Math.round(x.ref_h)}px`).join(' · ');
 }
 
 for (const row of DATA.rows) {
@@ -223,12 +234,17 @@ for (const row of DATA.rows) {
     c.onclick = () => openEditor(row, v);
     players.push({ canvas:c, cap, variant:v, row });
   }
-  row.stage = stage;
+  row.stage = stage; row.el = el;
   el.appendChild(stage);
 
   // Per-row transport. Rows have different frame counts, so stepping is per
   // row rather than global -- "frame 3" only means something inside one row.
-  const n = row.variants[0].frames.length;
+  // Versions of the same action can have different frame counts -- six drawn
+  // frames and ten drawn frames are the same run. So the transport is the
+  // cycle's PHASE, and each version maps that phase onto its own frames.
+  // Indexing every version by the first one's frame count is why a ten-frame
+  // cycle only ever showed its first six.
+  const n = Math.max(...row.variants.map(v => v.frames.length));
   const strip = document.createElement('div'); strip.className = 'strip';
   strip.innerHTML = `
     <button class="step" title="Previous frame (\u2190)">&#9664;</button>
@@ -244,13 +260,20 @@ for (const row of DATA.rows) {
   const note = strip.querySelector('input[type=text]');
   const flag = strip.querySelector('.flagbox button');
 
-  row.ui = { scrub, label, n, manual: false };
-  scrub.oninput = () => { row.ui.manual = true; setPlaying(false); };
+  row.ui = { scrub, label, n, phase: 0, manual: false };
+  scrub.oninput = () => { row.ui.manual = true; setPlaying(false);
+    row.ui.phase = (+scrub.value) / row.ui.n; };
   prev.onclick = () => stepRow(row, -1);
   next.onclick = () => stepRow(row, +1);
   flag.onclick = async () => {
+    // A flag names a frame of the version being worked on, since that is the
+    // one the next generation will be told to fix.
+    const target = row.variants.find(v => v.label === DATA.editable)
+                   || row.variants[row.variants.length - 1];
+    const frame = Math.min(target.frames.length - 1,
+                           Math.floor(row.ui.phase * target.frames.length));
     const body = { subject: DATA.subject, anim: row.name,
-                   frame: +scrub.value, note: note.value.trim() };
+                   frame, note: note.value.trim() };
     flag.disabled = true;
     try {
       const r = await fetch('/flag', { method:'POST',
@@ -368,7 +391,10 @@ function renderIssues(row, el) {
 // and touches nothing else, so the frame is editable where it is looked at.
 
 function openEditor(row, variant){
-  const idx = (+row.ui.scrub.value) % variant.frames.length;
+  // The frame index is per version: phase 40% is frame 4 of ten and frame 3
+  // of six.
+  const idx = Math.min(variant.frames.length - 1,
+                       Math.floor(row.ui.phase * variant.frames.length));
   const f = variant.frames[idx];
   const src = images[variant.image];
   if (!src) return;
@@ -455,7 +481,9 @@ function openEditor(row, variant){
 function stepRow(row, d){
   setPlaying(false); row.ui.manual = true;
   const n = row.ui.n;
-  row.ui.scrub.value = ((+row.ui.scrub.value + d) % n + n) % n;
+  const at = ((Math.round(row.ui.phase * n) + d) % n + n) % n;
+  row.ui.phase = at / n;
+  row.ui.scrub.value = at;
 }
 
 function setPlaying(v){
@@ -484,14 +512,21 @@ let t0 = performance.now(), acc = 0;
 function tick(now){
   const dt = now - t0; t0 = now;
   if (playing) {
-    acc += dt;
-    while (acc > 1000 / fps) { acc -= 1000 / fps;
-      for (const r of DATA.rows) if (r.ui)
-        r.ui.scrub.value = (+r.ui.scrub.value + 1) % r.ui.n; }
+    for (const r of DATA.rows) {
+      if (!r.ui) continue;
+      // Sync: every version finishes its loop in the time the FIRST version
+      // takes at this fps, so the same action is compared at the same speed
+      // however many frames it is drawn in. Off: each version advances a frame
+      // per tick, which is what a game with a fixed fps would do.
+      const base = r.variants[0].frames.length;
+      const cyclesPerSec = fps / (sync ? base : r.ui.n);
+      r.ui.phase = (r.ui.phase + (dt / 1000) * cyclesPerSec) % 1;
+      r.ui.scrub.value = Math.floor(r.ui.phase * r.ui.n);
+    }
   }
   for (const p of players) draw(p);
   for (const r of DATA.rows) if (r.ui)
-    r.ui.label.textContent = `frame ${r.ui.scrub.value} / ${r.ui.n - 1}`;
+    r.ui.label.textContent = `${(r.ui.phase * 100).toFixed(0)}% of cycle`;
   requestAnimationFrame(tick);
 }
 
@@ -500,8 +535,11 @@ function draw(p){
   const c = p.canvas, g = c.getContext('2d');
   const v = p.variant, frames = v.frames;
   if (!frames.length) return;
-  const idx = p.row.ui ? +p.row.ui.scrub.value : 0;
-  const f = frames[idx % frames.length];
+  // Phase -> this version's own frame. A ten-frame cycle at 40% is on its
+  // fourth frame; a six-frame cycle at 40% is on its third.
+  const phase = p.row.ui ? p.row.ui.phase : 0;
+  const idx = Math.min(frames.length - 1, Math.floor(phase * frames.length));
+  const f = frames[idx];
   const flagged = DATA.issues.some(i => i.anim === p.row.name && i.frame === idx);
   c.classList.toggle('flagged', flagged && v.label === DATA.editable);
   // Exactly what the game does: one scale for the whole set, derived from the
@@ -562,7 +600,7 @@ function draw(p){
   if (showGrid) { g.strokeStyle = 'rgba(128,128,128,.5)';
     g.setLineDash([3,3]); g.strokeRect(x, y, w, h); g.setLineDash([]); }
   const up = (DATA.height_tiles * device.px) / v.ref_h;
-  p.cap.innerHTML = `${v.label} · frame ${idx % frames.length} · `
+  p.cap.innerHTML = `${v.label} · frame ${idx + 1}/${frames.length} · `
     + `<span class="${up > 1.05 ? 'bad' : 'good'}">${up.toFixed(1)}×</span>`;
 }
 </script></body></html>

@@ -1143,3 +1143,29 @@ Whether that trade is right depends on the animation: a run that plays at 14fps
 and fills the screen for the whole level is a different question from a hurt
 flash that plays five frames once. It is not a decision the tool should make,
 so it makes both easy to look at instead.
+
+## Comparing versions that have different frame counts
+
+Six drawn frames and ten drawn frames are the **same action**, so the transport
+cannot be a frame index. It was one, taken from the first version on the row,
+which meant a ten-frame cycle shown beside a six-frame one only ever displayed
+its first six frames — the other four were unreachable and invisible.
+
+The transport is the cycle's **phase** instead, and each version maps that phase
+onto its own frames. At 40% through the cycle a ten-frame version is on frame 5
+and a six-frame version is on frame 3. The scrub's granularity is the *longest*
+version on the row, so every frame of every version can be stepped to, and each
+caption reads `frame 5/10` rather than a shared number that means different
+things in different columns.
+
+Speed then splits into two honest questions, so there is a **Sync speed** toggle:
+
+- **On** (default): every version completes its loop in the same time, so the
+  comparison is about the motion — is ten frames actually smoother than six?
+- **Off**: every version advances one frame per tick at the chosen fps, which is
+  what a game with a fixed `ANIM.fps` would do — so a ten-frame cycle takes
+  longer and runs slower. That is the question of whether the *game* needs
+  retiming, which is separate.
+
+Flags and hand edits resolve against the version being worked on, not the row,
+since a frame number only means something inside one version.
