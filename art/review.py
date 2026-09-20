@@ -51,7 +51,8 @@ LOOK_FOR = [
     "anything anatomically wrong for the creature described",
     "a frame that would flicker or jump if these were played in order",
     "more than one character in a single frame",
-    "guide lines, grid borders, labels, text or numbers left in the artwork",
+    "guide lines, labels, text or numbers left inside a frame's ARTWORK -- not "
+    "the contact sheet's own numbering, which is not part of the art",
 ]
 
 PROMPT = """You are reviewing a sprite sheet for defects before it goes into a game.
@@ -61,6 +62,11 @@ The character: {description}
 The sheet is laid out as a numbered contact sheet. Each frame is labelled with \
 its number in the margin ABOVE it. The frames are {count} poses of "{anim}", \
 meant to play in order as a loop.
+
+IMPORTANT: the numbered dark strips, the pale backing squares and the thin grey \
+borders around each cell are THIS REVIEW SHEET, not the artwork -- they were \
+added to show you the frames and are not in the game. Never report them as a \
+defect. Judge only what is drawn inside each cell.
 
 Look for each of these, frame by frame:
 {checks}

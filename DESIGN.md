@@ -1494,3 +1494,30 @@ a ladder.
 again — producing a second `masie-climb-1.png`. `accept` searches both
 directories, so it then saw two different sheets claiming the same number.
 Numbering counts the archive now.
+
+## An identity reference propagates defects as faithfully as virtues
+
+Masie's other eight sheets were drawn with her **accepted run sheet** as
+`identity`, which held one character across nine sheets — and carried its flaws
+across them too. `review` reports the same two findings on `idle` that it found
+on `run`: the tail narrows at the hips before widening into a fan rather than
+being broadest at its base, and the rear legs join at the tail base with no
+smooth body between.
+
+Both were already described against, in words, three times. Neither was fixed
+before the reference was reused, so all nine sheets inherited them.
+
+The order matters: **fix the reference sheet, then draw from it.** A defect in
+the reference is not one sheet's problem, it is every later sheet's problem, and
+the cost of noticing late is nine regenerations instead of one.
+
+## A review harness can report itself
+
+The first clean run of `review` reported *"the frame labels, dark header strip
+and contact-sheet grid borders remain visible in the artwork"* — describing the
+numbering `review` itself draws. A model shown a composite will critique the
+composite.
+
+The prompt now says which furniture belongs to the review sheet and that it is
+never a defect. Worth remembering for any agentic check that builds its own
+input: say what you added, or it will be reported back to you.
