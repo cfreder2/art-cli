@@ -22,6 +22,27 @@ from art.refs import Reference, prompt_block
 # repeated edge to edge, so the two rules that keep a character readable are
 # exactly wrong for it. An outline becomes a grid line drawn across the world
 # every time the tile repeats, and a transparent margin becomes a gap.
+# A STRIP is a tile on one axis and an object on the others: a hanging vine
+# repeats top to bottom and has open air either side of it. Told to fill its
+# cell corner to corner, a generator fills it -- which is how the vine came
+# back as a 100% opaque rectangle of foliage.
+STRIP_RULES = [
+    "Each cell holds ONE NARROW OBJECT running the full height of the cell, "
+    "top edge to bottom edge, with FLAT BACKGROUND showing on BOTH SIDES of "
+    "it. It is not a panel and it does not fill the cell: it is a single "
+    "narrow thing with open space either side, like a rope hanging in air.",
+    "It must run off the TOP edge and off the BOTTOM edge -- no gap, no "
+    "rounded end, no tip. It is a section of something longer.",
+    "{seam}",
+    "NO OUTLINE box, border or frame around the cell.",
+    "The background is FLAT {backdrop}, and it is the only thing either side "
+    "of the object.",
+    "At least 24px of clear background between cells.",
+    "No labels, no text, no numbers, no grid lines and no cell borders in the "
+    "OUTPUT.",
+    "Every item on this sheet shares ONE palette and ONE light direction.",
+]
+
 TILE_RULES = [
     "Each cell holds ONE SQUARE tile, drawn as a perfect square and filling "
     "that square completely, corner to corner. No margin, no rounded corners, "
@@ -164,7 +185,7 @@ def build(
     backdrop = backdrop_for(profile, subject)
     if subject.kind == "tile":
         seam = SEAM_RULES.get(subject.raw.get("seamless"), SEAM_RULES["both"])
-        source = TILE_RULES
+        source = (STRIP_RULES if subject.raw.get("fill") is False else TILE_RULES)
     else:
         seam = ""
         source = SHEET_RULES
@@ -184,8 +205,11 @@ def build(
         ("Layout:" if (sheet.wrapped or sheet.gallery) else "Rows, top to bottom:"),
         *described,
         "",
-        (f"Size: draw each tile as a SQUARE at least {sheet.min_drawn}px on a "
-         f"side, filling its square completely."
+        (("Size: the object runs the FULL HEIGHT of its cell and is a fraction "
+          "of its width -- roughly a fifth as wide as it is tall."
+          if subject.raw.get("fill") is False else
+          f"Size: draw each tile as a SQUARE at least {sheet.min_drawn}px on a "
+          f"side, filling its square completely.")
          if subject.kind == "tile" else
          f"Size: the character must be AT LEAST {sheet.min_drawn}px tall in every "
         f"frame -- that is the point of this sheet, and a smaller drawing is the "

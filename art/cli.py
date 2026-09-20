@@ -1472,15 +1472,25 @@ def pack(ctx, fmt, quality, dry_run) -> None:
             if axis and subject.kind == "tile":
                 import numpy as np
                 from PIL import Image as _Image
+                # A solid tile can blend across a third of itself and only get
+                # softer. A STRIP cannot: blending a vine with a half-rolled
+                # copy of itself paints a pale ghost vine through the gaps.
+                # 0.35 ghosted 8.3% of the vine, 0.04 ghosts 1.6% and still
+                # closes the wrap.
+                feather = 0.04 if subject.raw.get("fill") is False else 0.35
                 images = [_Image.fromarray(
                     seamless_mod.make_seamless(np.asarray(im.convert("RGBA")),
-                                               axis if isinstance(axis, str) else "both"))
+                                               axis if isinstance(axis, str) else "both",
+                                               feather=feather))
                     for im in images]
 
-            # The reference row needs no correction at all: the base scale is
-            # derived from its own frame 0, so it moves with it.
-            scale = (1.0 if atlas_key == ref_key
-                     else pack_mod.scale_for(boxes, old, ref_old, ref_new))
+            # The reference row is corrected too. Leaving it at 1.0 assumes the
+            # redraw kept the relationship between its frame HEIGHT and how big
+            # the character looks -- and Masie's redraw did not: she is a longer,
+            # lower salamander now, so the same frame height carries a visibly
+            # bigger animal. Uncorrected, she was 18% larger standing still than
+            # in every other state, and shrank the moment she moved.
+            scale = pack_mod.scale_for(boxes, old, ref_old, ref_new)
 
             try:
                 normalised = fx_mod.normalise(subject.raw.get("effects") or {})

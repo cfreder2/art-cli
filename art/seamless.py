@@ -19,6 +19,12 @@ The cost is honest: the middle of the tile is a blend of two parts of itself, so
 fine detail softens. For ground, moss, water and stone -- which is what tiles
 are -- that is invisible. For a tile with a distinct object in it, it is not,
 and `check --seams` still reports what it actually got.
+
+`join_below` is the same idea with the roll left out. Two tiles that each wrap
+perfectly still show a line where one is stacked on the other -- a water
+surface on the water under it -- because nothing ever made those two EDGES
+agree. Blending the lower band of the upper tile toward the tile it sits on
+makes them agree, again by construction.
 """
 
 from __future__ import annotations
@@ -55,6 +61,61 @@ def make_seamless(rgba: np.ndarray, axis: str = "both",
         out = out * weight + rolled * (1.0 - weight)
 
     return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def join_below(tile: np.ndarray, under: np.ndarray,
+               feather: float = 0.25) -> np.ndarray:
+    """Return `tile` with its bottom edge continuing into `under`'s top.
+
+    Both tiles wrap correctly on their own and still show a line between them,
+    because `make_seamless` only ever made a tile agree with ITSELF. So the
+    bottom `feather` of `tile` is faded toward `under`, weighted one above the
+    band and zero at the very last row.
+
+    The last row is therefore `under`'s last row -- and `under`'s last row
+    already continues into `under`'s first, which is what making it seamless on
+    the vertical bought. Stacking the pair is then the same junction as
+    stacking `under` on itself.
+
+    `under` is resized to `tile`'s size first: two tiles cut from one sheet are
+    the same cell but rarely the same pixel count, because the cutter trims
+    each one to its own art.
+    """
+    a = tile.astype(np.float32)
+    h, w = a.shape[:2]
+    b = _resized(under, w, h).astype(np.float32)
+
+    # Zero at the last row, one at the top of the band, eased between -- the
+    # same cosine as the wrap blend, so neither leaves a ridge.
+    y = np.arange(h, dtype=np.float32)
+    band = max(feather, 1e-3) * h
+    t = np.clip((h - 1 - y) / band, 0.0, 1.0)
+    weight = (0.5 - 0.5 * np.cos(np.pi * t))[:, None, None]
+
+    return np.clip(a * weight + b * (1.0 - weight), 0, 255).astype(np.uint8)
+
+
+def _resized(rgba: np.ndarray, w: int, h: int) -> np.ndarray:
+    if rgba.shape[0] == h and rgba.shape[1] == w:
+        return rgba
+    from PIL import Image
+    return np.asarray(Image.fromarray(rgba).resize((w, h), Image.LANCZOS))
+
+
+def junction_step(upper: np.ndarray, lower: np.ndarray) -> tuple[float, float]:
+    """(step across the junction, the typical internal step of the pair).
+
+    What `seams.py` scores for a wrap, measured where one tile is stacked on
+    another instead: the upper tile's last row against the lower tile's first.
+    """
+    a = upper.astype(np.float32)
+    b = _resized(lower, a.shape[1], a.shape[0]).astype(np.float32)
+    step = float(np.abs(a[-1, :, :] - b[0, :, :]).mean())
+    internal = np.concatenate([
+        np.abs(a[1:, :, :] - a[:-1, :, :]).mean(axis=(1, 2)),
+        np.abs(b[1:, :, :] - b[:-1, :, :]).mean(axis=(1, 2)),
+    ])
+    return step, float(np.median(internal))
 
 
 def wrap_step(rgba: np.ndarray, axis: str) -> tuple[float, float]:

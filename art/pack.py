@@ -94,27 +94,49 @@ def cut_sheet(path: Path, backdrop: str, names: list[str],
     return keyed, out
 
 
+def _apparent(w: float, h: float) -> float:
+    """How big a frame LOOKS, independent of how it is posed.
+
+    Frame height is not it. A character stretched into a leap is short and wide
+    and exactly as big as before; a character curled up is tall and narrow and
+    also exactly as big. The geometric mean of the two holds steady through
+    both, which frame height does not.
+    """
+    return (w * h) ** 0.5
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    n = len(ordered)
+    if not n:
+        return 0.0
+    mid = n // 2
+    return ordered[mid] if n % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+
+
 def scale_for(new_boxes: list[cut_mod.Box], old: list[list[int]],
               ref_old: float, ref_new: float) -> float:
     """What to multiply the character's base scale by for this row.
 
     The game derives ONE scale per character from a reference frame -- AXI uses
-    `1.15 / atlas.axi.idle[0][3]` -- so a row's drawn size is its own height
-    over that reference. Preserving the drawn size means preserving that ratio.
+    `1.15 / atlas.axi.idle[0][3]` -- and applies it to every row. Preserving how
+    big she LOOKS in a row means preserving that row's apparent size relative to
+    the reference, so the multiplier cancels whatever the redraw changed.
 
-    Which is why the answer is not simply "old height over new height". When the
-    reference row is itself redrawn, the base scale moves with it and the
-    multiplier is 1: the frog's idle IS his reference, so replacing it corrects
-    itself. Masie's idle is untouched while her run tripled in resolution, so
-    her run needs the full correction.
+    Measured on the tallest frame first, which was wrong: the redrawn poses vary
+    far more in height than the old ones did, so matching their ceilings left
+    the shortest frame of `fall` drawn at 85px where it used to be 127. She
+    visibly shrank mid-jump. The median of the geometric mean is steady through
+    a stretch, and it is a median so one extreme pose cannot drag it.
     """
     if not old or not new_boxes or not ref_old or not ref_new:
         return 1.0
-    old_top = max(f[3] for f in old)
-    new_top = max(b.h for b in new_boxes)
-    if not new_top:
+    old_size = _median([_apparent(f[2], f[3]) for f in old])
+    new_size = _median([_apparent(b.w, b.h) for b in new_boxes])
+    if not new_size or not old_size:
         return 1.0
-    return round((old_top / ref_old) / (new_top / ref_new), 5)
+    # Relative to the reference frame, which moves when that row is redrawn too.
+    return round((old_size / ref_old) / (new_size / ref_new), 5)
 
 
 def merge(atlas_png: Path, atlas_json: Path, replacements: list[Replacement],

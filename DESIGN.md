@@ -1591,6 +1591,60 @@ construction**. Every tile went to ~1.0x.
 The cost is honest: the middle blends with itself, so fine detail softens. For
 ground, moss, water and stone that is invisible.
 
+## One axis per SUBJECT was one too few
+
+`seamless:` was written on the subject, and a subject is a whole sheet. AXI's
+water is one sheet with two tiles on it and they do not repeat the same way:
+the surface carries a crest and only ever repeats sideways, while every tile
+below it is stacked as well. One value cannot say both. `both` rolls the crest
+into the middle of the surface tile and there is no waterline left; `horizontal`
+leaves the body -- the tile the entire pond is made of -- with the 21.8x
+vertical seam it started with.
+
+Ground had the same problem and nobody had noticed. `dirt` is described in
+art.yaml as "the fill below the surface", the game draws it under every grass
+tile, and it was declared `horizontal` along with the grass it shares a sheet
+with.
+
+So `seamless:` takes a map as well as a string:
+
+```yaml
+terrain_ground: {seamless: horizontal}   # every tile on the sheet
+terrain_water:
+  seamless:
+    water_surface: horizontal            # a crest: never stacked
+    water_body: both                     # the pond is made of it
+```
+
+A bare string still means every tile on the sheet. Most sheets want that, and
+rewriting them would be noise.
+
+## A stack has junctions, not only wraps
+
+Two tiles that are each perfectly seamless still show a line where one sits on
+the other, and `check --seams` could not see it: it scores a tile against
+itself, and both of them pass. The seam is *between* them and nothing was
+measuring it.
+
+It is the wrap problem with the roll left out, so it is solved the same way. A
+tile names what it sits on:
+
+```yaml
+joins: {water_surface: water_body}   # my bottom edge continues into its top
+```
+
+and the bottom band of the surface is blended toward the body, weighted one
+above the band and zero at the last row. The surface's last row is then the
+body's last row -- and the body's last row already continues into the body's
+first, which is what `both` bought. So surface-on-body is the same junction as
+body-on-body, by construction rather than by luck.
+
+`check --seams` scores it too, in a `joint` column, so a join that was declared
+and never built shows up instead of being assumed. The order matters and is
+enforced by doing it in two passes: every tile is made seamless first, then the
+joins are blended, because a join to a tile that has not been healed yet copies
+the unhealed edge.
+
 ## Lossy compression undoes it, and the gutter is why
 
 Packed, `water_col` measured **10.0x** again -- from 1.1x. Compressed on its own
@@ -1709,3 +1763,60 @@ One line in each: `ctx.imageSmoothingQuality = 'high'`.
 It is worth stating plainly because it inverts the usual intuition. Adding
 pixels is not automatically an improvement; it changes which resampling path
 the art takes, and the path it lands on has to be chosen.
+
+---
+
+# Integration: four failures, none of them in the art
+
+Everything below came from running the game rather than looking at sheets.
+
+## A stale build is indistinguishable from broken art
+
+`dist/atlas.json` held the previous pack's `scales` beside the current
+`atlas.webp`. Same geometry, same image, wrong multipliers -- so every sprite
+drew at the wrong size and it read as "all manner of visual artifacts". The
+atlas itself was sound: 207 frame rects, zero overlaps, zero out of bounds.
+
+Worth checking the served build against the packed one before believing
+anything about the art.
+
+## Frame height is not how big a character looks
+
+`scale_for` matched each row's TALLEST frame to the old row's tallest. The
+redrawn poses vary far more in height than the old ones did -- a leap is short
+and wide, a crouch is tall and narrow -- so matching ceilings left the shortest
+frame of `fall` drawn at 85px where it used to be 127. She visibly shrank
+mid-jump.
+
+The geometric mean of a frame's dimensions holds steady through a stretch,
+where height does not. Taking the **median** of that across a row, so one
+extreme pose cannot drag it:
+
+| apparent size | before | after (tallest) | after (median √area) |
+| --- | --- | --- | --- |
+| idle | 153–160 | 180–189 | **153–161** |
+| fall | 148–162 | 114–136 | **147–175** |
+| swing across all nine | 1.47× | 1.50× | **1.39×** |
+
+## The reference row needs correcting too
+
+Leaving it at ×1.0 assumes the redraw preserved the relationship between the
+reference frame's HEIGHT and how big the character looks. Masie's did not: she
+is a longer, lower salamander now, so the same frame height carries a visibly
+bigger animal. Uncorrected she was 18% larger standing still than in any other
+state, and shrank the moment she moved.
+
+## A rule can be followed exactly and still be wrong
+
+The vine came back as a solid rectangle of foliage, 100% opaque, because it was
+classified `kind: tile` and the tile rule says *"fills its square completely,
+corner to corner, the artwork runs off all four edges."* It did exactly that.
+
+A vine is a **strip**: a tile on one axis and an object on the others, drawn
+0.64 tiles wide with open air either side. `STRIP_RULES` says so -- full height,
+background on both sides, running off top and bottom, about a fifth as wide as
+tall.
+
+Strips also need a much narrower seamless blend. Rolling a vine by half and
+blending paints a pale ghost vine through its own gaps: 8.3% of it at the
+default feather, 1.6% at 0.04, and the wrap closes either way.

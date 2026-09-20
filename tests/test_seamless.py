@@ -68,3 +68,27 @@ def test_the_atlas_cannot_grow_past_what_webp_can_encode():
     WebP refuses either dimension past 16383."""
     from art.pack import MAX_SIDE
     assert MAX_SIDE == 16383
+
+
+def test_a_narrow_feather_ghosts_far_less():
+    """A strip with transparent sides cannot blend across a third of itself:
+    the half-rolled copy shows through the gaps as a second, pale object.
+
+    The stem has to WANDER for this to bite. A perfectly straight one lands on
+    top of itself when rolled and cannot ghost at all, which is what the first
+    version of this test measured.
+    """
+    h, w = 240, 48
+    a = np.zeros((h, w, 4), np.uint8)
+    a[..., :3] = 120
+    for y in range(h):
+        cx = int(w / 2 + (w / 3) * np.sin(y / 19.0))
+        a[y, max(0, cx - 5):cx + 5, 3] = 255
+
+    def ghost(f):
+        out = make_seamless(a, "vertical", feather=f)
+        return float(((out[..., 3] > 40) & (a[..., 3] <= 40)).mean())
+
+    wide, narrow = ghost(0.35), ghost(0.04)
+    assert wide > 0.002, f"fixture does not ghost at all ({wide:.4f})"
+    assert narrow < wide / 2, (narrow, wide)
