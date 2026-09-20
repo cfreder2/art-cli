@@ -121,9 +121,20 @@ def generate(
 
 def next_candidate(directory: Path, stem: str) -> tuple[Path, int]:
     """Candidates are kept, not overwritten: a generator produces variations and
-    picking one is a judgement `accept` records rather than makes."""
+    picking one is a judgement `accept` records rather than makes.
+
+    Numbering counts the ARCHIVE too. Archiving empties the live directory, and
+    numbering from one again produces a second `<sheet>-1.png` -- so `accept`,
+    which searches both, sees two different sheets with the same number.
+    """
     directory.mkdir(parents=True, exist_ok=True)
-    n = 1
-    while (directory / f"{stem}-{n}.png").exists():
-        n += 1
+    archive = directory.parent / "archive" / "candidates"
+    used = set()
+    for d in (directory, archive):
+        if d.is_dir():
+            for f in d.glob(f"{stem}-*.png"):
+                tail = f.stem.rsplit("-", 1)[-1]
+                if tail.isdigit():
+                    used.add(int(tail))
+    n = max(used, default=0) + 1
     return (directory / f"{stem}-{n}.png", n)

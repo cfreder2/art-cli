@@ -617,7 +617,17 @@ function draw(p){
     left = Math.max(left, anchorOf(fr, i));
     right = Math.max(right, fr[2] * scale - anchorOf(fr, i));
   });
-  const boxH = DATA.height_tiles * device.px * 1.7;
+  // Size the canvas to the TALLEST frame this row actually draws, across every
+  // version, not to the character's standing height. A climb is vertical and
+  // runs well over twice as tall as an idle, and deriving the box from
+  // height_tiles simply cut her off at the knees.
+  let boxH = 0;
+  for (const other of p.row.variants) {
+    const s2 = (DATA.height_tiles * device.px) / other.ref_h;
+    for (const fr of other.frames)
+      boxH = Math.max(boxH, (fr[3] + (fr[4] || 0)) * s2);
+  }
+  boxH = Math.max(boxH * 1.08, DATA.height_tiles * device.px * 0.8);
   const cw = Math.max(90, Math.ceil(left + right) + 24), ch = Math.ceil(boxH) + 16;
   if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch;
     c.style.width = cw + 'px'; c.style.height = ch + 'px'; }

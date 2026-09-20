@@ -1460,3 +1460,37 @@ reference row itself takes ×1.0, since the base scale moves with it.
 
 Verified across all eleven rows: every one lands within 0.98–1.00× of the size
 it drew before, on 2.7× to 7.6× the source pixels.
+
+## The preview sized its canvas to the wrong thing
+
+`view` derived each canvas from `height_tiles × device px`, which is the
+character's **standing** height. A climb is vertical — Masie is two and a half
+times taller in it than in her idle — so she was drawn past the bottom of the
+box and cut off at the knees.
+
+The canvas now follows the tallest frame the row actually draws, across every
+version on it, so the versions still line up.
+
+## "Seen from the side" is not enough for a rotated pose
+
+Her first climb came back **facing the viewer**: three-quarter head, both eyes,
+limbs splayed forward. Every other row is a strict profile, and the description
+said "seen from the side" — but for a pose rotated a quarter turn, that reads as
+a new composition rather than the same one turned.
+
+What worked was saying it as a rotation of the drawing she already is: *strict
+side view exactly as in every other row, one eye visible, far-side legs behind
+the near ones, the same drawing rotated a quarter turn, nose up, tail hanging
+straight down.*
+
+The limb cycle is still subtler than asked for. A climb has no ground contact
+and no travel, so the only cue is the limbs passing each other — naming four
+feet at four different heights got a profile that reads as climbing, but not yet
+a ladder.
+
+## Archiving broke candidate numbering
+
+`archive` empties the live directory, and the next generation numbered from one
+again — producing a second `masie-climb-1.png`. `accept` searches both
+directories, so it then saw two different sheets claiming the same number.
+Numbering counts the archive now.
