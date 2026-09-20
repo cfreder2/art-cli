@@ -1752,8 +1752,17 @@ def scene(ctx, port, no_open) -> None:
                 note = note if isinstance(note, dict) else {}
                 tall = note.get("tiles_tall") or subject.raw.get("height_tiles_drawn")
                 if tall:
-                    bands.append({**r, "name": key, "tilesTall": tall,
-                                  "speed": 0.35 if key == "hill" else 1.0})
+                    # The game's own parallax numbers: the hill band drifts at
+                    # 0.35 and never repeats vertically; a cloud layer drifts at
+                    # 0.15 * mul, sits at 0.5 + 0.7 * mul tiles down, and is
+                    # spaced 3.4 * mul of its own widths apart.
+                    mul = {"cloud": 1.0, "cloud_face": 1.7}.get(key)
+                    bands.append({
+                        **r, "name": key, "tilesTall": tall,
+                        "band": mul is not None, "mul": mul or 1.0,
+                        "alpha": 0.95 if mul else 1.0,
+                        "speed": 0.35 if mul is None else 0.15 * mul,
+                    })
                 elif subject.kind == "tile":
                     crop = px[r["y"]:r["y"] + r["h"], r["x"]:r["x"] + r["w"]]
                     axis = subject.raw.get("seamless") or "both"

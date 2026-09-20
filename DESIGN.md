@@ -1661,3 +1661,25 @@ It does not share a size: a tree is 3.6 tiles across and a gem is 0.6.
 
 So `width_tiles` and `tiles_tall` live on the entry, beside its description,
 and `scene` falls back to the group only when an entry does not say.
+
+## Two bugs the sky band surfaced
+
+**A double image.** `cloud` and `cloud_face` were drawn at the same height, at
+the same speed, laid edge to edge — so the two layers sat on top of each other
+and every cloud in the preview had a face. The game does none of that: it
+spaces each layer `w × 3.4 × mul` apart, at `0.5 + 0.7 × mul` tiles down, and
+drifts it at `0.15 × mul`. A preview of parallax that does not use the game's
+own parallax numbers is not previewing the game.
+
+**Shimmer at low resolution, and why it was only visible there.** Destination
+coordinates were fractional, so the browser resampled every frame against a
+slightly different pixel grid. At 320px per tile that is invisible; at 83 it
+reads as flashing. Positions and sizes are rounded now.
+
+That second one is a genuine trade rather than a fix: whole pixels shimmer less
+and judder more, because a band drifting at 0.15 moves in one-pixel steps
+instead of continuously. For slow parallax at a low tile size, crisp wins.
+
+Worth noting the game draws its clouds at fractional coordinates too, at
+`game.js:2288`. It has always done so, and on a phone it will have the same
+shimmer — a real finding from previewing the art rather than the code.
