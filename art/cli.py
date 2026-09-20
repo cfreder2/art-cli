@@ -21,6 +21,8 @@ from rich.table import Table
 from art import profile as profile_mod
 from art.audit import rows as audit_rows
 from art.measure import read_legacy
+from art.plan import plan_subject
+from art.refs import resolve as resolve_refs
 from art.spec import DEVICES, DEVICE_BY_KEY, TARGET_TILE_PX
 
 console = Console()
@@ -74,11 +76,14 @@ def main(ctx: click.Context, project: Path | None) -> None:
                    "AXI's `enemy` holds four characters, not four animations.")
 @click.option("--height", "heights", multiple=True, metavar="NAME=TILES",
               help="Set a subject's height in tiles (repeatable).")
+@click.option("--sheet", "sheet_paths", multiple=True, metavar="GROUP=PATH",
+              help="Where a group's source sheet lives (repeatable). A redraw "
+                   "attaches it as the identity reference automatically.")
 @click.option("--tile-px", default=TARGET_TILE_PX, show_default=True, help="The target tile size.")
 @click.option("--force", is_flag=True, help="Overwrite an existing art.yaml.")
 @click.option("--dry-run", is_flag=True, help="Print the draft; write nothing.")
 @click.pass_context
-def init(ctx, from_atlas, splits, heights, tile_px, force, dry_run) -> None:
+def init(ctx, from_atlas, splits, heights, sheet_paths, tile_px, force, dry_run) -> None:
     """Draft an art.yaml for this project.
 
     The draft is a starting point, not an answer: which entries are separate
@@ -96,6 +101,11 @@ def init(ctx, from_atlas, splits, heights, tile_px, force, dry_run) -> None:
                 from_atlas = root / guess
                 break
 
+    group_sheets = {}
+    for spec in sheet_paths:
+        g, _, path = spec.partition("=")
+        group_sheets[g.strip()] = path.strip()
+
     overrides = {}
     for h in heights:
         name, _, value = h.partition("=")
@@ -110,7 +120,7 @@ def init(ctx, from_atlas, splits, heights, tile_px, force, dry_run) -> None:
                     kind = "tile" if len(anim.frames) == 1 else "character"
                     subjects[entry] = {
                         "kind": kind, "state": "legacy",
-                        "source": {"group": gname, "entry": entry},
+                        "source": _source(gname, group_sheets, entry=entry),
                     }
                 continue
             single = all(len(a.frames) == 1 for a in group.anims.values())
@@ -120,20 +130,23 @@ def init(ctx, from_atlas, splits, heights, tile_px, force, dry_run) -> None:
                 for entry in group.anims:
                     subjects[entry] = {
                         "kind": "tile", "state": "legacy",
-                        "source": {"group": gname, "entry": entry},
+                        "source": _source(gname, group_sheets, entry=entry),
                     }
                 continue
             prefix = _common_prefix(list(group.anims))
             name = prefix.rstrip("_") or gname
             subjects[name] = {
                 "kind": "character", "state": "legacy",
-                "source": {"group": gname, "prefix": prefix},
+                "source": _source(gname, group_sheets, prefix=prefix),
                 "sheets": {name: [a[len(prefix):] for a in group.anims]},
             }
 
     for name, body in subjects.items():
         if body["kind"] == "character":
             body["height_tiles"] = overrides.get(name, 1.0)
+            # Drawn facing right and mirrored at draw time. Set false only for a
+            # subject whose art is asymmetric enough that flipping it is wrong.
+            body["mirror"] = True
         elif body["kind"] == "prop":
             body["width_tiles"] = overrides.get(name, 1.0)
 
@@ -155,6 +168,14 @@ def init(ctx, from_atlas, splits, heights, tile_px, force, dry_run) -> None:
     console.print(f"[green]wrote[/green] {out}  "
                   f"[dim]{len(subjects)} subjects ({chars} characters), all state=legacy[/dim]")
     console.print("[dim]Set height_tiles per character, then re-run `art audit`.[/dim]")
+
+
+def _source(group: str, sheets: dict[str, str], **extra) -> dict:
+    """Where this subject came from, and the sheet it was drawn on."""
+    out = {"group": group, **{k: v for k, v in extra.items() if v}}
+    if group in sheets:
+        out["sheet"] = sheets[group]
+    return out
 
 
 def _common_prefix(names: list[str]) -> str:
@@ -256,3 +277,83 @@ def status(ctx) -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# ---------------------------------------------------------------- plan --
+
+@main.command()
+@click.argument("names", nargs=-1)
+@click.option("--all", "everything", is_flag=True, help="Every subject.")
+@click.option("--budget", is_flag=True,
+              help="Total the generations instead of laying each sheet out.")
+@click.option("--tight", is_flag=True,
+              help="Pack as many animation rows as clear the minimum height. "
+                   "Fewer sheets to generate, less room for a tall pose.")
+@click.pass_context
+def plan(ctx, names, everything, budget, tight) -> None:
+    """What to ask the generator for, and what it will cost.
+
+    Counts one facing by default. A 2D game mirrors horizontally, so a sheet
+    drawn facing right already covers left; only a subject marked
+    `mirror: false` is asymmetric enough to need both, and it says so.
+    """
+    prof = _load(ctx.obj["project"])
+    try:
+        groups = read_legacy(_atlas_path(prof))
+    except click.ClickException:
+        groups = {}
+
+    chosen = [s for n, s in prof.subjects.items()
+              if everything or n in set(names)] or list(prof.subjects.values())
+    plans = [plan_subject(prof, s, groups, tight=tight) for s in chosen]
+
+    if budget:
+        table = Table(title="Generation budget", header_style="bold")
+        table.add_column("subject"); table.add_column("kind", style="dim")
+        table.add_column("sheets", justify="right")
+        table.add_column("facings", justify="right")
+        table.add_column("images", justify="right")
+        total = 0
+        for pl in sorted(plans, key=lambda p: -p.generations):
+            if pl.kind == "tile":
+                continue
+            total += pl.generations
+            table.add_row(pl.subject, pl.kind, str(len(pl.sheets)),
+                          str(pl.facings) + ("" if pl.mirrored else " [red]both[/red]"),
+                          str(pl.generations))
+        console.print(table)
+        tiles = sum(1 for pl in plans if pl.kind == "tile")
+        console.print(f"[bold]{total}[/bold] character/prop generations"
+                      + (f" [dim]+ {tiles} terrain entries to pack into grids[/dim]" if tiles else ""))
+        console.print("[dim]one image per sheet per facing — mirroring at draw time "
+                      "is what keeps the second facing off this bill[/dim]")
+        return
+
+    for pl in plans:
+        head = f"[bold]{pl.subject}[/bold] [dim]{pl.kind}[/dim]"
+        if pl.kind != "tile":
+            head += f"  min drawn [bold]{pl.min_drawn}px[/bold]"
+        console.print(head)
+        if pl.sheets:
+            t = Table(box=None, header_style="dim", pad_edge=False)
+            t.add_column("sheet"); t.add_column("grid"); t.add_column("cell")
+            t.add_column("animations"); t.add_column("")
+            for sh in pl.sheets:
+                ok = "[green]fits[/green]" if sh.fits else "[red]TOO SMALL[/red]"
+                t.add_column
+                t.add_row(sh.name, f"{sh.cols}×{sh.rows}", f"{sh.cell_w}×{sh.cell_h}",
+                          ", ".join(sh.anims) or "—", ok)
+            console.print(t)
+        refs = resolve_refs(prof, prof.subjects[pl.subject])
+        if refs:
+            console.print("  [dim]references:[/dim] " + ", ".join(
+                f"[bold]{r.role}[/bold]=" + r.path.name for r in refs))
+        elif pl.kind != "tile":
+            console.print("  [yellow]no references[/yellow][dim] — a redraw with "
+                          "nothing attached comes back a different character[/dim]")
+        for note in pl.notes:
+            console.print(f"  [dim]· {note}[/dim]")
+        if pl.kind != "tile":
+            console.print(f"  [dim]→[/dim] [bold]{pl.generations}[/bold] "
+                          f"[dim]generation(s) at {prof.canvas}² canvas[/dim]")
+        console.print()

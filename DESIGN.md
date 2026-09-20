@@ -415,3 +415,80 @@ because its sheet changed on disk after it was cut.
 - One character per sheet means **more files, not fewer** — 19 sources instead
   of 6. That is the trade the spec already made, and the tool's job is to make
   19 cheaper to manage than 6 are today, not to pretend they are the same.
+
+---
+
+# One facing, and showing the model what it should look like
+
+## One facing
+
+A 2D game mirrors a sprite horizontally at draw time — AXI does it at
+`game.js:727` with `ctx.scale(-1, 1)`. So a sheet drawn facing right already
+covers left, and asking a generator for a turnaround doubles the bill for
+nothing. `mirror: true` is the default and `plan` counts one facing.
+
+The exception is asymmetry, and it is a real one: mirroring flips *everything*.
+An eye patch changes eyes, a sash swaps shoulders, a held tool moves hand. A
+subject like that sets `mirror: false`, genuinely needs both facings, and the
+budget doubles because the art requires it rather than because a generator
+volunteered it.
+
+Worth being precise about what is *not* wasted today: AXI's `AXI_LEFT` and
+`AXI_RIGHT` are the left and right **halves of the sheet** (x 0–800 and
+800–1536), holding different animations. They are not facings. The current
+sheets already store one direction.
+
+## How many sheets, and the trade `--tight` makes
+
+Rows are animations, columns are frames — an animation per row is what lets a
+row share one ground line, which is what the cutter measures against.
+
+The spec puts **four animations on a character sheet**. That is a flat choice,
+not arithmetic: 6×4 for Masie, 7×4 for an enemy and 6×4 for a friend are all
+"four animations". Packing more rows technically clears the minimum height —
+seven rows of Masie fit at 2048, giving 292px cells against her 240px minimum —
+while leaving almost nothing for a jump pose that is taller than an idle. That
+is the failure the spec warns about: *fewer frames per image, not smaller
+frames.*
+
+So the spec layout is the default, `--tight` opts into the trade knowingly, and
+`plan` prints what each costs. For AXI: **12 generations** at the spec layout,
+10 at `--tight`.
+
+## References: four roles, not "inspiration"
+
+`codex exec -i/--image FILE` attaches images, and they arrive numbered, so a
+prompt can say "Image 1" and mean it. That numbering only works if each image
+has a stated job, so a reference is always one of four:
+
+| role | what the prompt says about it |
+| --- | --- |
+| `style` | match brushwork, palette, line weight, outline — not subject or composition |
+| `identity` | this is the character; keep markings, colours, silhouette, costume |
+| `revise` | the sheet being changed; keep every row not named identical |
+| `pose` | follow this layout and posing |
+
+`identity` is the one that matters for AXI, and it carries a warning the others
+do not need: **ignore the resolution.** Mr Frog is 45×45 today — that is the
+bug — but that sheet is still the only statement of what Mr Frog looks like.
+Attaching it without saying so invites a redraw that faithfully reproduces 45
+pixels.
+
+Because forgetting it is how a redraw comes back as a *different* frog, a
+subject still on its old art attaches its own sheet automatically:
+
+```yaml
+style_ref: art/refs/axi-style.png       # every prompt carries this
+
+subjects:
+  frog:
+    state: legacy
+    source: {group: npc, sheet: assets/sprites/npc_sheet.png}
+    # → references: identity=npc_sheet.png, with no flag typed
+```
+
+Adding an animation to a character already redrawn is the same mechanism with a
+different role: the accepted sheet goes in as `revise`, the prompt names only
+the new row, and everything else is told to stay identical. That is how twelve
+separate generations stay one character — and `plan` prints a warning when a
+subject would be generated with nothing attached at all.
