@@ -742,6 +742,20 @@ def view(ctx, subject, candidate, port, no_open) -> None:
     rows = []
     for name, variants in sorted(per_row.items(), key=order):
         first = variants[0]
+        # A game scales a character by its IDLE frame and applies that scale to
+        # every row. `today` has an idle to measure. A candidate that is only
+        # one animation does not, so scaling it by its own first frame would
+        # render it at an unrelated size and the comparison would be about
+        # scale rather than about sharpness -- which is the whole point here.
+        #
+        # So each later variant is normalised to render at the same apparent
+        # size as the first, and only the pixel density differs.
+        base = variants[0]
+        base_mean = sum(f[3] for f in base["frames"]) / len(base["frames"])
+        for v in variants[1:]:
+            mean = sum(f[3] for f in v["frames"]) / len(v["frames"])
+            if base_mean > 0 and mean > 0:
+                v["ref_h"] = mean * base["ref_h"] / base_mean
         rows.append({"name": name, "frames": first["frames"],
                      "src_h": max(f[3] for f in first["frames"]),
                      "spread": max(f[4] for f in first["frames"]),
