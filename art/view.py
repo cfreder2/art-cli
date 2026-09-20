@@ -600,8 +600,15 @@ function draw(p){
   if (showGrid) { g.strokeStyle = 'rgba(128,128,128,.5)';
     g.setLineDash([3,3]); g.strokeRect(x, y, w, h); g.setLineDash([]); }
   const up = (DATA.height_tiles * device.px) / v.ref_h;
-  p.cap.innerHTML = `${v.label} · frame ${idx + 1}/${frames.length} · `
-    + `<span class="${up > 1.05 ? 'bad' : 'good'}">${up.toFixed(1)}×</span>`;
+  // Every version is drawn at the same size on screen, so this number is
+  // about SHARPNESS, not scale: how far its source pixels are stretched to
+  // reach that size. Showing the source height beside it makes that plain.
+  const src = Math.max(...frames.map(fr => fr[3]));
+  p.cap.innerHTML = `${v.label} · frame ${idx + 1}/${frames.length}`
+    + ` · <span title="tallest source frame">${src}px src</span>`
+    + ` · <span class="${up > 1.05 ? 'bad' : 'good'}"`
+    + ` title="how far the source is stretched at this device size">`
+    + `${up.toFixed(2)}×</span>`;
 }
 </script></body></html>
 """

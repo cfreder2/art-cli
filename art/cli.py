@@ -768,12 +768,18 @@ def view(ctx, subject, candidates, port, no_open) -> None:
         #
         # So each later variant is normalised to render at the same apparent
         # size as the first, and only the pixel density differs.
+        # Normalise on the TALLEST frame, not the mean. A cycle's mean height
+        # depends on how many stretched poses it happens to contain, so a
+        # ten-frame version with more low frames would look smaller than a
+        # six-frame one drawn at the same size. The tallest frame is the most
+        # upright pose in the set, which is the closest thing to the idle frame
+        # a game would really scale by.
         base = variants[0]
-        base_mean = sum(f[3] for f in base["frames"]) / len(base["frames"])
+        base_top = max(f[3] for f in base["frames"])
         for v in variants[1:]:
-            mean = sum(f[3] for f in v["frames"]) / len(v["frames"])
-            if base_mean > 0 and mean > 0:
-                v["ref_h"] = mean * base["ref_h"] / base_mean
+            top = max(f[3] for f in v["frames"])
+            if base_top > 0 and top > 0:
+                v["ref_h"] = top * base["ref_h"] / base_top
         rows.append({"name": name, "frames": first["frames"],
                      "src_h": max(f[3] for f in first["frames"]),
                      "spread": max(f[4] for f in first["frames"]),

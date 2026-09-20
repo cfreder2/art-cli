@@ -1184,3 +1184,37 @@ So the page's script is extracted and run through `node --check` in the tests,
 skipped when node is not installed, plus a check that nothing is declared twice
 at the top level. Shipping a page that renders blank is worse than shipping one
 that is ugly, because blank looks like the tool is broken rather than the page.
+
+## The upscale number is about sharpness, and the caption has to say so
+
+Every version on a row is normalised to the same apparent size, so the `×`
+beside it is **not** a scale — it is how far that version's source pixels are
+stretched to reach that size. Two versions of the same action showing `0.33×`
+and `0.43×` is not an inconsistency: the second genuinely has fewer pixels per
+frame, which is the thing being compared.
+
+The caption now prints the tallest source frame beside the factor
+(`257px src · 0.33×`), because a bare number invites reading it as a size.
+
+Normalisation is on the **tallest** frame of each version rather than the mean.
+A cycle's mean height depends on how many stretched poses it happens to
+contain, so a ten-frame version with more low frames would report as smaller
+than a six-frame one drawn at the same scale. The tallest frame is the most
+upright pose in the set, which is the nearest thing to the idle frame a game
+would really scale by.
+
+## Exaggeration has an upper bound, and it is a shape
+
+"Build the cycle on body length" fixed a static run and then overshot: her torso
+swung 40% across the cycle and she read as a stretching weasel rather than a
+chubby axolotl.
+
+The fix was to name the limit and move the motion: *the change in her body
+length is SLIGHT -- about one part in eight, a springy gather and release, not a
+stretch. Her legs and her tail do the moving; her torso barely changes.* Plus
+the shape it must keep -- small, round, chubby, never long and thin.
+
+Swing went 40% → **10%**, and she came back **taller** as a side effect: 246px
+against 201px, because a body that does not stretch sideways fits more of the
+cell vertically. Less exaggeration bought both a better silhouette and better
+resolution.
