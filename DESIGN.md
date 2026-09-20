@@ -184,3 +184,131 @@ decoded it.
   runs, and the atlas stays committed. AXI's build keeps its dependency-free
   property; this tool is free to use Pillow, numpy and click the way `DnD-CLI`
   does.
+
+---
+
+# The artifact, the runtime, and the preview
+
+## Generated files are never hand-edited
+
+One rule underneath all of this: `art.yaml` is source, `atlas.json` is build
+output. Tuning a walk cycle in the preview writes **back to `art.yaml`**, and
+`pack` emits it forward into `atlas.json`. Nothing is typed into a generated
+file, because `pack` overwrites it.
+
+That is the answer to "store the timing in JSON?" — it ends up in JSON, but it
+is never authored there.
+
+## The atlas format
+
+Today AXI's atlas is `{image, w, h, <sheet>: {<anim>: [[x, y, w, h, lift], …]}}`,
+where `lift` is how far the frame rides above its row's baseline. That fifth
+number is the good idea in the current pipeline and it survives: it is what
+gives the run cycle its bounce back after trimming.
+
+Two things get fixed.
+
+**The scale constants stop being duplicated.** `game.js` currently computes
+`axiScale = 1.15 / atlas.axi.idle[0][3]` — the height in tiles is a literal in
+the JS, and the divisor is whatever height the first idle frame happened to
+come out. Redraw the idle and every sprite in the game silently changes size.
+`height_tiles` already lives in `art.yaml`, so `pack` emits it, and the runtime
+reads it. One number, one place.
+
+**The shape follows Aseprite's.** Frame rects, per-frame duration, and named
+animation ranges are a solved problem with a de facto standard, and engines
+have importers for it. Matching that shape costs nothing now and is what makes
+a sheet portable to MANTIS, or to Godot, without writing an importer. The
+things only this pipeline knows — `lift`, `height_tiles`, the content box, the
+tile unit — go in a namespaced block rather than bent into fields that already
+mean something else. *(Worth verifying the exact dialect against a real
+importer before this is locked.)*
+
+```jsonc
+{
+  "format": 1,
+  "image": "atlas.webp",
+  "size": {"w": 2048, "h": 2377},
+  "tile_px": 192,                      // what the art was drawn for
+  "subjects": {
+    "masie": {
+      "kind": "character",
+      "height_tiles": 1.15,            // was a literal in game.js
+      "anims": {
+        "run": {
+          "fps": 14,                   // a default, not a decision
+          "loop": "forward",           // forward | pingpong | once
+          "frames": [
+            {"x": 791, "y": 1753, "w": 110, "h": 79, "lift": 3}
+            // "ms": 220 on a frame overrides fps, for a hold on a landing
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+## The runtime: the tool vends the reader
+
+`art runtime --emit web/sprite.js` writes the loader for the format the tool
+writes. Not a package to install and keep in step — the generator ships its own
+reader, so the two cannot drift, and each game vendors a copy it can edit.
+
+```js
+const sheet = await Sprite.load('atlas.json');     // reads atlas.webp too
+const masie = sheet.actor('masie');                // knows height_tiles
+masie.play('run');                                 // fps from the file
+masie.play('run', {fps: 22});                      // the game overrides
+masie.draw(ctx, x, y, {tile_px: view.tile});       // scales itself, lift applied
+```
+
+The file carries **defaults**; the call site wins. Anything the tool can
+measure belongs in the JSON; anything the game decides at runtime — current
+speed, whether it loops right now, tint, flip — never does.
+
+## `art view` — and bare `art`
+
+`art` with no subcommand runs `art view`, the way `dnd` with no subcommand
+starts a session. Run it in a game folder and it finds the nearest `art.yaml`
+above you, builds if the atlas is stale, serves a page and opens it.
+
+The preview is not a zoom slider. It shows the art at **real device pixels per
+tile**, from the same table the spec is built on:
+
+| | iPhone SE | iPhone 15 | 1080p | target | 5K iMac |
+| --- | --- | --- | --- | --- | --- |
+| px/tile | 83 | 131 | 120 | **192** | 320 |
+
+with the upscale factor printed live beside each one — `1.7× up`, the same
+number `audit` reports. "Is this pixelated?" is only answerable at a real device
+size, so the preview and the audit are the same measurement, shown two ways.
+
+Also on the page: a speed slider per animation, a **baseline overlay** (the
+row's ground line, so a bobbing frame is visible rather than inferred), onion
+skin, and a file watcher that re-cuts and reloads when a sheet changes on disk.
+Changes made in the page are written back to `art.yaml` on save.
+
+## Extensible without being limiting
+
+The line is: **close what has to agree, open everything else.**
+
+Closed, because the tool does arithmetic with it — `kind` is
+`character | tile | prop`, and `format` is an integer. A fourth kind would mean
+`plan` and `check` disagree about a size, which is the exact failure this whole
+design exists to prevent. A new kind is a change to the tool, on purpose.
+
+Open, and passed through untouched:
+
+- `meta:` on any subject in `art.yaml` lands in `atlas.json` verbatim. Hitboxes,
+  damage frames, sound cues, whatever the next game needs. The tool never reads
+  it and never drops it.
+- `tags:` for selection — `art cut --tag boss`, `art audit --tag world1`.
+- unknown keys are **preserved on write**, the way `artsource.py` puts back only
+  the art keys it owns so that round-tripping cannot silently delete a campaign.
+- `--from` at every stage, so a sheet made by hand anywhere still flows through.
+- `art pack --emit <plugin>` for a project that needs a different atlas dialect,
+  rather than teaching the core about every engine.
+
+The version field is what makes this safe: a runtime that reads `format: 1` can
+refuse `format: 2` loudly instead of drawing garbage.
