@@ -42,6 +42,12 @@ SHEET_RULES = [
     "or a mirrored set -- the game flips the sprite itself.",
     "Align every frame to that same invisible groundline, so the animation "
     "does not bob when it plays.",
+    "EVERY limb the character has appears in EVERY frame. A four-legged "
+    "character shows FOUR legs in all of them. Never drop, merge or hide a "
+    "limb behind the body because it overlaps -- draw the far-side limbs in a "
+    "slightly DARKER shade of the same colour so they read as being behind, "
+    "and keep their outline. A limb that vanishes for one frame is a limb that "
+    "flickers when the row is animated.",
 ]
 
 

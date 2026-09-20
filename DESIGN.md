@@ -904,3 +904,42 @@ the thing that already worked. That only holds because the role instruction is
 specific: *layout and posing only -- not the colours, not the facial features,
 not the proportions.* A reference with no stated job would have carried the
 mistakes straight back in.
+
+## Limbs vanish, and the fix is a shading convention
+
+Two separate Masie candidates came back with **three legs** in half their
+frames. A side-view quadruped occludes its far limbs, and the generator
+resolves the overlap by dropping them -- which, animated, is a leg that
+flickers in and out six times a second.
+
+It is not a reference problem: candidate 2 and candidate 3 had different
+references and the same failure. So it is a sheet rule now, stated the way a
+2D artist would state it:
+
+> EVERY limb the character has appears in EVERY frame. Never drop, merge or
+> hide a limb behind the body because it overlaps -- draw the far-side limbs in
+> a slightly **darker shade** of the same colour so they read as being behind,
+> and keep their outline.
+
+That is the standard convention and it worked first try: four legs in all six
+frames, the far pair legible as a deeper pink.
+
+## Silhouette aspect catches what "the tail looks short" is really about
+
+The tail was reported short. It was not, after the description asked for one
+reaching back as far as her body -- but the impression survived, and measuring
+the silhouette says why:
+
+| | width / height |
+| --- | --- |
+| original Masie | **1.61** |
+| candidate | **1.29** |
+
+She is standing *taller and narrower* than she used to be, because the walk
+direction told her to stand up on four legs with her belly clear of the
+ground. A tail of the same length reads shorter against a taller body.
+
+The lesson is that a proportion note belongs beside a posture note: telling a
+character to stand up will make it taller unless the description also says how
+long and how low it is. Aspect ratio is cheap to measure off the identity
+reference and is the number that catches it.
