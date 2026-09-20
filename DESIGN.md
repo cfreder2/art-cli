@@ -1094,3 +1094,52 @@ and that they will be sent as art direction on the next `art draw`.
 They were being used — `draw` folds them into the prompt as *"Fix these
 specifically and keep everything else identical"* — but a feature that gives no
 sign it is working is one nobody trusts, which is the same as not having it.
+
+---
+
+# Accepting, comparing, and what more frames cost
+
+## `accept`
+
+A generator produces variations and picking one is a judgement, so `accept`
+**records** it rather than makes it. The chosen file is copied to
+`art/sheets/<sheet>.png` and every candidate stays where it is — the point of
+accepting is to have something the next `art draw` cannot lose. It also sets the
+subject to `state: accepted`, which is what makes `check` start holding it to
+the rules.
+
+## Comparison is open-ended
+
+Which two versions matter is not knowable when the page is built, and
+relaunching to see a third loses whatever was set up on the page. So the preview
+takes `--candidate` repeatedly, shows the accepted sheet automatically beside
+`today`, and carries a **compare another version…** control that cuts any sheet
+in the project on demand and adds a column to every row.
+
+Each version is normalised to the same apparent size, so a three-way comparison
+is about the art rather than about scale. Hand edits apply to the newest version
+only; the earlier ones are there to judge against.
+
+## The pose list is the authority on frame count
+
+The atlas says how many frames the **old** animation had, which is exactly what
+is being changed when someone writes ten poses for a six-frame cycle. So a
+written `frames` list sets the count, and the grid follows from it.
+
+## Ten frames cost resolution, and the trade is worth stating
+
+At a fixed 1254px canvas, frames and pixels-per-frame trade directly:
+
+| | grid | cell | drawn height |
+| --- | --- | --- | --- |
+| 6 frames | 3×2 | 418×627 | 186–257px |
+| 10 frames | 3×4 | 418×313 | **149–201px** |
+
+About 20% smaller, for a cycle that reads as continuous instead of stepped.
+Widths arc 292 → 409 → 319 and heights mirror them, which is the smooth wave
+that six frames could only approximate.
+
+Whether that trade is right depends on the animation: a run that plays at 14fps
+and fills the screen for the whole level is a different question from a hurt
+flash that plays five frames once. It is not a decision the tool should make,
+so it makes both easy to look at instead.

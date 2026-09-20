@@ -654,12 +654,14 @@ def _candidate_rows(path, backdrop, names, expect, write_to, wrapped=0):
 
 @main.command()
 @click.argument("subject")
-@click.option("--candidate", "candidate", type=click.Path(exists=True, dir_okay=False, path_type=Path),
-              default=None, help="A sheet to preview. Defaults to the newest candidate.")
+@click.option("--candidate", "candidates", multiple=True,
+              type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              help="A sheet to compare (repeatable). Defaults to the accepted "
+                   "sheet if there is one, else the newest candidate.")
 @click.option("--port", default=8731, show_default=True)
 @click.option("--no-open", "no_open", is_flag=True, help="Serve, but do not open a browser.")
 @click.pass_context
-def view(ctx, subject, candidate, port, no_open) -> None:
+def view(ctx, subject, candidates, port, no_open) -> None:
     """Preview the animations in a browser, at real device sizes.
 
     Shows what ships today beside the candidate, both scaled the way the game
@@ -707,37 +709,51 @@ def view(ctx, subject, candidate, port, no_open) -> None:
                     if v["label"] == "today":
                         v["ref_h"] = ref
 
-    # The candidate.
-    if candidate is None:
+    # Every version to compare, in the order they should read.
+    plan_for = plan_subject(prof, sub, groups)
+    expect = plan_for.sheets[0].cols if plan_for.sheets else None
+    wrapped = plan_for.sheets[0].wrapped if plan_for.sheets else 0
+
+    sources: list[tuple[str, Path]] = []
+    accepted = (sub.raw.get("accepted") or {})
+    for sheet_name, rec in accepted.items():
+        f = prof.root / rec.get("file", "")
+        if f.is_file():
+            sources.append((f"accepted (#{rec.get('candidate', '?')})", f))
+    for c in candidates:
+        sources.append((c.stem, c))
+    if not sources:
         pool = sorted((prof.root / "art" / "candidates").glob(f"{subject}*.png"))
-        candidate = pool[-1] if pool else None
-    if candidate:
-        pl = plan_subject(prof, sub, groups)
-        expect = pl.sheets[0].cols if pl.sheets else None
+        if pool:
+            sources.append((pool[-1].stem, pool[-1]))
+
+    seen: set[Path] = set()
+    for n, (label, path) in enumerate(sources):
+        if path.resolve() in seen:
+            continue
+        seen.add(path.resolve())
+        served = f"version{n}.png"
         detected, short, extra = _candidate_rows(
-            candidate, backdrop_for(prof, sub), anim_names, expect,
-            serve / "candidate.png",
-            wrapped=(pl.sheets[0].wrapped if pl.sheets else 0))
+            path, backdrop_for(prof, sub), anim_names, expect,
+            serve / served, wrapped=wrapped)
         if short:
-            console.print("[yellow]incomplete rows:[/yellow] " + ", ".join(short)
-                          + " [dim]— frames touching, below the 24px the rules ask for[/dim]")
+            console.print(f"[yellow]{label}: incomplete rows[/yellow] "
+                          + ", ".join(short))
         if extra:
-            console.print(f"[yellow]{len(extra)} row(s) on the sheet the profile "
-                          f"does not name[/yellow] [dim]— drawn before the "
-                          f"animation list changed; harmless, and dropped by pack[/dim]")
+            console.print(f"[yellow]{label}: {len(extra)} unnamed row(s)[/yellow]")
         ref = next((v[0][3] for k, v in detected.items() if k == "idle"),
                    next(iter(detected.values()))[0][3] if detected else 1)
         for name, frames in detected.items():
             per_row.setdefault(name, []).append(
-                {"label": "candidate", "image": "candidate.png",
-                 "frames": frames, "ref_h": ref})
+                {"label": label, "image": served, "frames": frames, "ref_h": ref})
 
     if not per_row:
         raise click.ClickException("Nothing to preview: no atlas entry and no candidate.")
+    rows = []
 
     def order(item):
         name = item[0]
-        has_new = any(v["label"] == "candidate" for v in item[1])
+        has_new = len(item[1]) > 1
         rank = anim_names.index(name) if name in anim_names else len(anim_names)
         return (0 if has_new else 1, rank, name)
 
@@ -777,9 +793,19 @@ def view(ctx, subject, candidate, port, no_open) -> None:
             shutil_mod.copy2(f, serve / f"edit-{f.name}")
             edits[f.stem] = f"edit-{f.name}"
 
+    # The version a hand edit applies to: the last one added, which is the one
+    # being worked on. Earlier versions are there to compare against.
+    editable = sources[-1][0] if sources else ""
+
     data = {"devices": view_mod.device_list(),
             "subject": subject,
-            "sheet": (pl.sheets[0].name if candidate and pl.sheets else subject),
+            "editable": editable,
+            "available": [
+                {"file": str(f.relative_to(prof.root)), "label": f.stem}
+                for f in sorted((prof.root / "art" / "candidates").glob(f"{subject}*.png"))
+                + sorted((prof.root / "art" / "sheets").glob(f"{subject}*.png"))
+            ],
+            "sheet": (plan_for.sheets[0].name if plan_for.sheets else subject),
             "edits": edits,
             "issues": list(sub.raw.get("issues") or []),
             "effects": {r["name"]: fx_mod.for_anim(normalised, r["name"]) for r in rows},
@@ -810,6 +836,8 @@ def view(ctx, subject, candidate, port, no_open) -> None:
                 self._unflag(); return
             if self.path == "/edit":
                 self._save_edit(); return
+            if self.path == "/compare":
+                self._add_version(); return
             if self.path != "/flag":
                 self.send_error(404); return
             try:
@@ -871,6 +899,40 @@ def view(ctx, subject, candidate, port, no_open) -> None:
             console.print(f"[green]edited[/green] {subject}/{anim} frame {frame} "
                           f"[dim]→ {dest.relative_to(prof.root)}[/dim]")
             payload = __import__("json").dumps({"url": f"edit-{name}"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers(); self.wfile.write(payload)
+
+        def _add_version(self):
+            """Serve one more sheet to compare against, cut on demand.
+
+            Comparison is open-ended on purpose: which two versions matter is
+            not knowable when the page is built, and relaunching to see a third
+            loses whatever was set up on the page.
+            """
+            try:
+                body = self._body()
+                rel = str(body["file"])
+            except Exception as exc:
+                self.send_error(400, str(exc)); return
+            path = (prof.root / rel).resolve()
+            if not path.is_file() or prof.root.resolve() not in path.parents:
+                self.send_error(400, "not a file in this project"); return
+
+            served = f"version-{abs(hash(rel)) % 10**8}.png"
+            try:
+                detected, short, _ = _candidate_rows(
+                    path, backdrop_for(prof, sub), anim_names, expect,
+                    serve / served, wrapped=wrapped)
+            except Exception as exc:
+                self.send_error(400, f"could not cut it: {exc}"); return
+            ref = next((v[0][3] for k, v in detected.items() if k == "idle"),
+                       next(iter(detected.values()))[0][3] if detected else 1)
+            payload = __import__("json").dumps({
+                "label": path.stem, "image": served, "ref_h": ref,
+                "rows": detected, "short": short}).encode()
+            console.print(f"[dim]comparing {rel}[/dim]")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -1045,3 +1107,57 @@ def template(ctx, sheet, anchor) -> None:
                   f"groundline at {int(t.baseline_y * 100)}% of each cell[/dim]")
     console.print("[dim]point the subject at it: "
                   f"reference: {{template: art/templates/{sh.name}.png}}[/dim]")
+
+
+# -------------------------------------------------------------- accept --
+
+@main.command()
+@click.argument("sheet")
+@click.argument("candidate", type=int, required=False)
+@click.option("--note", default="", help="Why this one. Kept in art.yaml.")
+@click.pass_context
+def accept(ctx, sheet, candidate, note) -> None:
+    """Keep a candidate as the sheet for real.
+
+    A generator produces variations and picking one is a judgement; this
+    records it rather than makes it. The chosen file is COPIED to
+    `art/sheets/<sheet>.png`, and every candidate stays where it is -- the
+    point of accepting is to have something that cannot be lost by the next
+    `art draw`.
+    """
+    import shutil
+
+    prof = _load(ctx.obj["project"])
+    subject, sh, pl = _sheet_for(prof, sheet)
+    pool = sorted((prof.root / "art" / "candidates").glob(f"{sh.name}-*.png"))
+    if not pool:
+        raise click.ClickException(f"No candidates for {sh.name}. Run `art draw {sh.name}`.")
+
+    if candidate is None:
+        chosen = pool[-1]
+        candidate = int(chosen.stem.rsplit("-", 1)[1])
+    else:
+        chosen = prof.root / "art" / "candidates" / f"{sh.name}-{candidate}.png"
+        if not chosen.is_file():
+            have = ", ".join(c.stem.rsplit("-", 1)[1] for c in pool)
+            raise click.ClickException(
+                f"No candidate {candidate} for {sh.name}. Have: {have}.")
+
+    dest = prof.root / "art" / "sheets" / f"{sh.name}.png"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(chosen, dest)
+
+    accepted = dict(subject.raw.get("accepted") or {})
+    accepted[sh.name] = {
+        "candidate": candidate,
+        "file": str(dest.relative_to(prof.root)),
+        **({"note": note} if note else {}),
+    }
+    subject.raw["accepted"] = accepted
+    subject.state = "accepted"
+    profile_mod.save(prof)
+
+    console.print(f"[green]accepted[/green] {sh.name} candidate {candidate} "
+                  f"[dim]→ {dest.relative_to(prof.root)}[/dim]")
+    console.print(f"[dim]{subject.name} is now state=accepted; "
+                  f"`art check` holds it to the rules from here.[/dim]")

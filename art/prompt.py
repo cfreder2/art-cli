@@ -90,7 +90,12 @@ def build(
             f"  ONE continuous {sheet.wrapped}-frame {only} cycle, laid out "
             f"{sheet.cols} across and {sheet.rows} down. Read it left to right "
             f"along the top row, then continue on the next row — frame "
-            f"{sheet.cols + 1} sits below frame 1.",
+            f"{sheet.cols + 1} sits below frame 1."
+            + (f" The grid holds {sheet.cols * sheet.rows} cells and there are "
+               f"only {sheet.wrapped} frames, so the LAST "
+               f"{sheet.cols * sheet.rows - sheet.wrapped} cell(s) are left "
+               f"completely EMPTY — flat background, nothing drawn in them."
+               if sheet.cols * sheet.rows > sheet.wrapped else ""),
             f"  {only} — {summary}",
         ]
         described += _per_frame(note, sheet.wrapped)

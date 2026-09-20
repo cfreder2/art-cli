@@ -176,7 +176,13 @@ def plan_subject(
             # to bottom and frames left to right within a row, so concatenating
             # them restores the order -- which only holds because the sheet
             # carries a single animation.
-            total = counts.get(anims[0], 6)
+            # A written pose list is the authority on how many frames there
+            # are: the atlas says how many the OLD animation had, which is what
+            # is being changed when someone writes eleven poses for a six-frame
+            # cycle.
+            note = (subject.raw.get("anims") or {}).get(anims[0])
+            written = len(note.get("frames") or []) if isinstance(note, dict) else 0
+            total = written or counts.get(anims[0], 6)
             cols = int(cols_override)
             rows = -(-total // cols)
             sheets.append(SheetPlan(

@@ -116,6 +116,7 @@ PAGE = """<!DOCTYPE html>
     <input id="fps" type="range" min="1" max="24" value="8">
     <span class="meta" id="fpsv">8 fps</span></div>
   <div class="group">
+    <select id="addver"></select>
     <button id="base" aria-pressed="false">Baseline</button>
     <button id="grid" aria-pressed="false">Frame box</button>
     <button id="play" aria-pressed="true">Pause</button>
@@ -155,8 +156,52 @@ document.getElementById('play').onclick = () => { playing = !playing;
   b.setAttribute('aria-pressed', String(playing));
   b.textContent = playing ? 'Pause' : 'Play'; };
 
+// Add another version to compare, without relaunching. Which two versions
+// matter is not knowable when the page is built.
+const addver = document.getElementById('addver');
+function fillAdd(){
+  const shown = new Set(DATA.rows.flatMap(r => r.variants.map(v => v.label)));
+  addver.innerHTML = '<option value="">compare another version…</option>' +
+    DATA.available.filter(a => !shown.has(a.label))
+      .map(a => `<option value="${a.file}">${a.label}</option>`).join('');
+}
+addver.onchange = async () => {
+  if (!addver.value) return;
+  const file = addver.value; addver.disabled = true;
+  try {
+    const r = await fetch('/compare', { method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file }) });
+    if (!r.ok) throw new Error(await r.text());
+    const v = await r.json();
+    images[v.image] = await load(v.image);
+    for (const row of DATA.rows) {
+      const frames = v.rows[row.name];
+      if (!frames) continue;
+      const base = row.variants[0];
+      const bm = base.frames.reduce((a,f)=>a+f[3],0)/base.frames.length;
+      const m = frames.reduce((a,f)=>a+f[3],0)/frames.length;
+      row.variants.push({ label: v.label, image: v.image, frames,
+                          ref_h: (bm>0&&m>0) ? m*base.ref_h/bm : v.ref_h });
+      addCell(row);
+    }
+    fillAdd();
+  } catch (e) { alert('Could not add: ' + e.message); }
+  addver.disabled = false; addver.value = '';
+};
+
 const host = document.getElementById('rows');
 const players = [];
+
+function addCell(row){
+  const v = row.variants[row.variants.length - 1];
+  const cell = document.createElement('div'); cell.className = 'cell';
+  const c = document.createElement('canvas'); cell.appendChild(c);
+  const cap = document.createElement('div'); cap.className = 'cap'; cell.appendChild(cap);
+  c.title = 'Click to clean this frame up by hand';
+  c.onclick = () => openEditor(row, v);
+  row.stage.appendChild(cell);
+  players.push({ canvas:c, cap, variant:v, row });
+}
 
 for (const row of DATA.rows) {
   const el = document.createElement('div'); el.className = 'row';
@@ -178,6 +223,7 @@ for (const row of DATA.rows) {
     c.onclick = () => openEditor(row, v);
     players.push({ canvas:c, cap, variant:v, row });
   }
+  row.stage = stage;
   el.appendChild(stage);
 
   // Per-row transport. Rows have different frame counts, so stepping is per
@@ -425,6 +471,7 @@ addEventListener('keydown', e => {
   if (e.key === ' ') { setPlaying(!playing); e.preventDefault(); }
 });
 
+fillAdd();
 (async () => {
   for (const p of players)
     if (!images[p.variant.image]) images[p.variant.image] = await load(p.variant.image);
@@ -456,7 +503,7 @@ function draw(p){
   const idx = p.row.ui ? +p.row.ui.scrub.value : 0;
   const f = frames[idx % frames.length];
   const flagged = DATA.issues.some(i => i.anim === p.row.name && i.frame === idx);
-  c.classList.toggle('flagged', flagged && v.label === 'candidate');
+  c.classList.toggle('flagged', flagged && v.label === DATA.editable);
   // Exactly what the game does: one scale for the whole set, derived from the
   // reference frame, with lift applied per frame.
   const scale = (DATA.height_tiles * device.px) / v.ref_h;
@@ -506,7 +553,7 @@ function draw(p){
   g.rotate(rot); g.scale(sScale, sScale);
   g.translate(-pivot, -(baseY - bobPx));
   g.globalAlpha = alpha;
-  const editUrl = v.label === 'candidate' ? DATA.edits[p.row.name + '-' + idx] : null;
+  const editUrl = v.label === DATA.editable ? DATA.edits[p.row.name + '-' + idx] : null;
   const edited = editUrl && images[editUrl];
   if (edited) g.drawImage(edited, 0, 0, f[2], f[3], x, y - bobPx, w, h);
   else g.drawImage(img, f[0], f[1], f[2], f[3], x, y - bobPx, w, h);
