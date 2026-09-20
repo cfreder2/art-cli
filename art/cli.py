@@ -662,7 +662,17 @@ def view(ctx, subject, candidate, port, no_open) -> None:
         def log_message(self, *a): pass
 
     socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("127.0.0.1", port), Handler) as httpd:
+    try:
+        httpd = socketserver.TCPServer(("127.0.0.1", port), Handler)
+    except OSError as exc:
+        # Errno 48 on a live listener, which allow_reuse_address does not help
+        # with -- it only covers TIME_WAIT. A stack trace here tells the user
+        # nothing they can act on.
+        raise click.ClickException(
+            f"Port {port} is already in use — another `art view` is probably "
+            f"still running. Try `--port {port + 1}`, or stop the other one."
+        ) from exc
+    with httpd:
         url = f"http://127.0.0.1:{port}/"
         console.print(f"[green]preview[/green] {url}  [dim]ctrl-c to stop[/dim]")
         if not no_open:
