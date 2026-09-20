@@ -6,3 +6,4 @@ dist/
 build/
 sheets/
 frames/
+uv.lock

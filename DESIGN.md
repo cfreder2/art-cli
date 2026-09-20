@@ -340,8 +340,9 @@ is wrong.
 
 ## The size of the job, measured
 
-447 frames ship today across 6 sheets. At one character per sheet and a 2048²
-canvas, the same content wants about **nineteen**:
+203 frames ship today across 6 sheets — 142 of character animation, plus 61
+terrain and decor entries of one frame each. At one character per sheet and a
+2048² canvas, the same content wants about **nineteen**:
 
 | | today | frames | sheets at 2048² |
 | --- | --- | --- | --- |
@@ -349,7 +350,7 @@ canvas, the same content wants about **nineteen**:
 | Mudbug, Glowgrub, Dragonfly, Nibbler | 1 shared sheet | 27 | **4** — one each |
 | Mr Frog | ⅓ of a shared sheet | 36 in 6 anims | **2** |
 | Sir Croaks | 1 sheet (already right) | 32 in 8 anims | **4** (3×3) |
-| terrain + decor | 2 tilesets | 305 in 61 entries | **~6** (8×8 grid, 3×2 decor) |
+| terrain + decor | 2 tilesets | 61 entries | **~6** (8×8 grid, 3×2 decor) |
 
 Nineteen generations is the real cost of this, and no tool removes it. What the
 tool removes is everything around it.
