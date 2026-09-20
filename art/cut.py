@@ -45,10 +45,16 @@ class Box:
 class Row:
     index: int
     boxes: list[Box]
+    gap_used: int = MIN_GAP_PX
+    expected: int | None = None
 
     @property
     def baseline_spread(self) -> int:
         return max((b.lift for b in self.boxes), default=0)
+
+    @property
+    def complete(self) -> bool:
+        return self.expected is None or len(self.boxes) == self.expected
 
 
 def key_distance(rgb: np.ndarray, key: tuple[int, int, int]) -> np.ndarray:
@@ -107,15 +113,45 @@ def _runs(present: np.ndarray, min_gap: int = MIN_GAP_PX) -> list[tuple[int, int
     return runs
 
 
+def _columns_in_band(present: np.ndarray, min_gap: int,
+                     expect: int | None) -> tuple[list[tuple[int, int]], int]:
+    """Column runs for one row, relaxing the gap until the count is right.
+
+    A generator does not always leave the 24px the sheet rules ask for. The
+    first real sheet left 5px between two frames of a hop, which merged them
+    into one 421px box beside neighbours half that width. Relaxing the gap
+    blindly would split a frame whose own limbs are separated; relaxing it only
+    until the KNOWN column count is reached cannot, because the count is the
+    thing being satisfied.
+    """
+    runs = _runs(present, min_gap)
+    if expect is None or len(runs) == expect:
+        return runs, min_gap
+    for gap in range(min_gap - 1, 1, -1):
+        tighter = _runs(present, gap)
+        if len(tighter) == expect:
+            return tighter, gap
+        if len(tighter) > expect:
+            break
+    return runs, min_gap
+
+
 def find_rows(alpha: np.ndarray, threshold: float = 0.35,
-              min_gap: int = MIN_GAP_PX) -> list[Row]:
-    """Rows of frames, and the frames in each, from an alpha channel."""
+              min_gap: int = MIN_GAP_PX,
+              expect: int | None = None) -> list[Row]:
+    """Rows of frames, and the frames in each, from an alpha channel.
+
+    `expect` is how many frames each row should hold, which the plan knows. A
+    row that cannot reach it is returned short and marked incomplete rather
+    than being forced.
+    """
     solid = alpha > threshold
     rows: list[Row] = []
     for n, (y0, y1) in enumerate(_runs(solid.any(axis=1), min_gap)):
         band = solid[y0:y1 + 1]
         boxes: list[Box] = []
-        for x0, x1 in _runs(band.any(axis=0), min_gap):
+        cols, gap_used = _columns_in_band(band.any(axis=0), min_gap, expect)
+        for x0, x1 in cols:
             cell = band[:, x0:x1 + 1]
             ys = np.where(cell.any(axis=1))[0]
             if ys.size == 0:
@@ -131,14 +167,27 @@ def find_rows(alpha: np.ndarray, threshold: float = 0.35,
         floor = max(b.y + b.h for b in boxes)
         for b in boxes:
             b.lift = floor - (b.y + b.h)
-        rows.append(Row(n, boxes))
+        rows.append(Row(n, boxes, gap_used, expect))
     return rows
 
 
-def detect(rgb: np.ndarray, key: tuple[int, int, int]) -> tuple[np.ndarray, list[Row]]:
+def detect(rgb: np.ndarray, key: tuple[int, int, int],
+           expect: int | None = None) -> tuple[np.ndarray, list[Row]]:
     """(alpha, rows) for a sheet drawn on a flat key colour."""
     alpha = alpha_from_colour(rgb, key)
-    return alpha, find_rows(alpha)
+    return alpha, find_rows(alpha, expect=expect)
+
+
+def keyed(rgb: np.ndarray, key: tuple[int, int, int]) -> np.ndarray:
+    """The sheet as RGBA: backdrop removed, spill pulled back, edges ramped.
+
+    This is what anything downstream should draw. Handing on the raw sheet
+    leaves every frame sitting in a rectangle of backdrop -- which is exactly
+    what the preview did before this existed.
+    """
+    a = alpha_from_colour(rgb, key)
+    out = np.dstack([unspill(rgb, key), (a * 255).astype(np.uint8)])
+    return out
 
 
 def hex_to_rgb(value: str) -> tuple[int, int, int]:

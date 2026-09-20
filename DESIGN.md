@@ -643,3 +643,30 @@ sheet rules demand 24px of clear background: the gap *is* the delimiter. When
 two frames touch, the detector merges them rather than inventing a boundary the
 art does not contain, which is exactly what it did to the hop row of the first
 generated sheet.
+
+## Two things the first preview got wrong
+
+Looking at it on screen found both immediately, which is the argument for the
+preview existing.
+
+**Every candidate frame sat in a rectangle of magenta.** The page was handed the
+raw sheet. The alpha was being computed and then thrown away -- detection used
+it, drawing did not. `cut.keyed()` now returns the sheet as RGBA, backdrop
+ramped out and spill pulled back, and that is what is served. Anything
+downstream draws the keyed image; nothing draws the plate.
+
+**The hop row showed two frogs in one frame.** The generator left **5px**
+between two frames where the rules ask for 24, so they merged into a 421px box
+beside neighbours half that width.
+
+Lowering the gap threshold globally would be the wrong fix: a frame whose own
+limbs are separated would start splitting in half. The right fix is that the
+plan already knows how many columns a row should have. `find_rows(expect=n)`
+relaxes the gap only until that count is reached, which cannot over-split
+because the count is the thing being satisfied. At `expect=6` the hop row
+splits at a 4px gap and every row comes back complete.
+
+A row that still cannot reach its count is returned short and marked
+`complete = False` rather than forced, and the preview prints which rows those
+are. Silently cutting a frame in a place the art does not contain would be
+worse than reporting that the sheet broke a rule.

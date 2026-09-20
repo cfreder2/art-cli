@@ -560,17 +560,28 @@ def draw(ctx, sheet, note, model, dry_run) -> None:
 
 # ---------------------------------------------------------------- view --
 
-def _candidate_rows(path, backdrop, names):
-    """Detect the frames on a generated sheet and name the rows in order."""
+def _candidate_rows(path, backdrop, names, expect, write_to):
+    """Detect the frames on a generated sheet, and write it out KEYED.
+
+    Writing the raw sheet would leave every frame sitting in a rectangle of
+    backdrop, which is what the preview showed before this did the keying.
+    """
     import numpy as np
     from PIL import Image
+
+    key = cut_mod.hex_to_rgb(backdrop)
     rgb = np.asarray(Image.open(path).convert("RGB"))
-    _, rows = cut_mod.detect(rgb, cut_mod.hex_to_rgb(backdrop))
-    out = {}
+    _, rows = cut_mod.detect(rgb, key, expect=expect)
+    write_to.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(cut_mod.keyed(rgb, key)).save(write_to)
+
+    out, short = {}, []
     for i, row in enumerate(rows):
         name = names[i] if i < len(names) else f"row{i + 1}"
         out[name] = [b.as_list() for b in row.boxes]
-    return out
+        if not row.complete:
+            short.append(f"{name} ({len(row.boxes)} of {expect})")
+    return out, short
 
 
 @main.command()
@@ -625,8 +636,13 @@ def view(ctx, subject, candidate, port, no_open) -> None:
         pool = sorted((prof.root / "art" / "candidates").glob(f"{subject}*.png"))
         candidate = pool[-1] if pool else None
     if candidate:
-        images["candidate.png"] = candidate
-        detected = _candidate_rows(candidate, prof.backdrop, anim_names)
+        pl = plan_subject(prof, sub, groups)
+        expect = pl.sheets[0].cols if pl.sheets else None
+        detected, short = _candidate_rows(
+            candidate, prof.backdrop, anim_names, expect, serve / "candidate.png")
+        if short:
+            console.print("[yellow]incomplete rows:[/yellow] " + ", ".join(short)
+                          + " [dim]— frames touching, below the 24px the rules ask for[/dim]")
         ref = next((v[0][3] for k, v in detected.items() if k == "idle"),
                    next(iter(detected.values()))[0][3] if detected else 1)
         for name, frames in detected.items():

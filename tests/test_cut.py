@@ -2,7 +2,8 @@
 
 import numpy as np
 
-from art.cut import MIN_GAP_PX, alpha_from_colour, find_rows, hex_to_rgb, unspill
+from art.cut import (MIN_GAP_PX, alpha_from_colour, find_rows, hex_to_rgb,
+                     keyed, unspill)
 
 MAGENTA = hex_to_rgb("#FC309B")
 
@@ -69,3 +70,47 @@ def test_a_gap_smaller_than_the_minimum_does_not_split():
     # blob == cell, so the space between the two blobs really is `gap`.
     a = sheet(rows=1, cols=2, cell=20, blob=20, gap=MIN_GAP_PX - 2)
     assert len(find_rows(alpha_from_colour(a, MAGENTA))[0].boxes) == 1
+
+
+def test_a_known_column_count_rescues_frames_the_generator_crowded():
+    """The first generated sheet left 5px between two frames of a hop, below
+    the 24px the rules ask for, and they merged into one box twice the width of
+    its neighbours. Relaxing the gap only until the KNOWN count is reached
+    cannot over-split, because the count is the thing being satisfied."""
+    a = np.zeros((80, 180, 3), dtype=np.uint8)
+    a[:, :] = MAGENTA
+    # Three frames; the last two only 3px apart, under MIN_GAP_PX.
+    for x0 in (30, 80, 103):
+        a[30:50, x0:x0 + 20] = (20, 30, 25)
+
+    # Without a count to aim at, the crowded pair merges into one box.
+    merged = find_rows(alpha_from_colour(a, MAGENTA))[0]
+    assert len(merged.boxes) == 2
+
+    row = find_rows(alpha_from_colour(a, MAGENTA), expect=3)[0]
+    assert len(row.boxes) == 3
+    assert row.gap_used < MIN_GAP_PX
+    assert row.complete
+
+
+def test_a_row_that_cannot_reach_the_count_is_marked_not_forced():
+    a = sheet(rows=1, cols=2, cell=20, blob=20, gap=30)
+    row = find_rows(alpha_from_colour(a, MAGENTA), expect=5)[0]
+    assert len(row.boxes) == 2 and not row.complete
+
+
+def test_a_row_that_matches_is_complete():
+    row = find_rows(alpha_from_colour(sheet(rows=1, cols=4), MAGENTA), expect=4)[0]
+    assert row.complete
+
+
+def test_keyed_removes_the_backdrop_and_leaves_no_rind():
+    """Handing on the raw sheet is what left every frame sitting in a rectangle
+    of magenta in the preview."""
+    out = keyed(sheet(rows=1, cols=2), MAGENTA)
+    assert out.shape[2] == 4
+    assert out[0, 0, 3] == 0                       # backdrop is transparent
+    assert out[..., 3].max() == 255                # art is opaque
+    visible = out[..., 3] > 40
+    r, g, b = out[..., 0].astype(int), out[..., 1].astype(int), out[..., 2].astype(int)
+    assert not (visible & (r > 170) & (g < 130) & (b > 110)).any()
