@@ -1343,3 +1343,60 @@ So the nudges were computed against a *smoothed* version of the head's own
 path, not a constant. Total swing 35.1 → 11.8 → **5.7px**, and the largest jump
 between neighbouring frames — which is what "whiplash" actually is — is
 **2.9px**, about 1% of her height.
+
+---
+
+# `review`: the verification a formula cannot do
+
+`rules.py` catches what a formula can catch. Every defect that actually cost a
+generation on this project was outside that set:
+
+> a stub protruding from the base of her tail · two frogs in one frame · a
+> doubled tail · five legs · gills that drifted blue · a nose that stopped being
+> her nose
+
+A person found every one of those by squinting at a 1254px sheet, and that does
+not survive sixty-six more subjects.
+
+So `art review` lays the cut frames out as a **numbered contact sheet** and hands
+it to a model with the specific list of things that have gone wrong here — not
+"look for problems", which gets a general answer, but *count the legs in every
+frame*, *any body part drawn twice*, *a stray stub where the body meets the
+tail*.
+
+Numbered, because a finding has to be addressable. "Frame 4" is actionable;
+"one of the frames" is not. And a numbered finding drops straight into the same
+`issues` block the preview writes, so `--flag` turns a review into art direction
+for the next `art draw`.
+
+The labels sit in a margin **above** each frame rather than on it, for the same
+reason the sheet rules forbid labels in generated art: a label touching the art
+is read as part of the character.
+
+## What it found, and what it got wrong
+
+Run against Masie's accepted sheet it reported the tail narrowing at its base
+and reading as a terminal fan rather than a full-length paddle — **independently
+finding the thing that had already been reported by eye**, and which was only
+partly fixed. It also caught a back leg overlapping the tail-base region across
+four frames, against a description that explicitly forbids it.
+
+It also claimed a pink cheek spot in every frame. Zoomed in, that is the
+specified nose dot. A false positive — and it marked that one `low` while the
+others were `high`, which is the right instinct.
+
+So: a strong first pass with some noise. That is why `--flag` is opt-in, why a
+failed call raises rather than returning "clean", and why the closing line of a
+clean review says *worth a look anyway — it is a second opinion, not a
+replacement for one.*
+
+## Effects reach the game
+
+They were previewable and then lost: `pack` did not emit them. It does now, into
+`anims["<group>/<row>"].effects`, and `Sprites.draw` applies them anchored at the
+feet the way the Frog King already breathed by hand.
+
+One bug worth recording. `phase` names how an offset is *chosen* — `none`, `x`,
+`random` — not the offset itself. Adding the string to the wave makes the whole
+expression `NaN` and the effect vanishes silently, which is the worst kind of
+failure: no error, no motion, nothing to notice.

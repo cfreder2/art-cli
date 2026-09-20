@@ -28,6 +28,7 @@ from art import draw as draw_mod
 from art import effects as fx_mod
 from art import seams as seams_mod
 from art import pack as pack_mod
+from art import review as review_mod
 from art import rules as rules_mod
 from art import template as tpl_mod
 from art.prompt import build as build_prompt
@@ -1493,3 +1494,100 @@ def runtime(ctx, dest) -> None:
                   f"[dim]{dest.stat().st_size // 1024}KB[/dim]")
     console.print("[dim]it applies scales, anchor, lift and effects — "
                   "the four things a naive reader gets wrong.[/dim]")
+
+
+# --------------------------------------------------------------- review --
+
+@main.command()
+@click.argument("sheet")
+@click.option("--from", "source", type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              default=None, help="A sheet to review. Defaults to the accepted one.")
+@click.option("--flag", "do_flag", is_flag=True,
+              help="Write the findings into art.yaml as frame flags, so they "
+                   "become art direction on the next draw.")
+@click.option("--model", "-m", default=None, help="The agent model to review with.")
+@click.option("--dry-run", is_flag=True, help="Show the contact sheet and the prompt; ask nothing.")
+@click.pass_context
+def review(ctx, sheet, source, do_flag, model, dry_run) -> None:
+    """Have a model look at the sheet and say what is wrong with it.
+
+    `check` catches what a formula can. Every defect that actually cost a
+    generation here was outside that set -- a stub at the tail root, a doubled
+    tail, five legs, gills that drifted blue. Those are visual judgements, and
+    a person made every one of them by squinting at a 1254px sheet.
+    """
+    import numpy as np
+    from PIL import Image
+
+    prof = _load(ctx.obj["project"])
+    subject, sh, pl = _sheet_for(prof, sheet)
+    if source is None:
+        rec = (subject.raw.get("accepted") or {}).get(sh.name) or {}
+        source = prof.root / rec.get("file", "")
+        if not source.is_file():
+            pool = sorted((prof.root / "art" / "candidates").glob(f"{sh.name}-*.png"))
+            if not pool:
+                raise click.ClickException(
+                    f"Nothing to review for {sh.name}. `art draw` or `art accept` first.")
+            source = pool[-1]
+
+    key = cut_mod.hex_to_rgb(backdrop_for(prof, subject))
+    rgb = np.asarray(Image.open(source).convert("RGB"))
+    _, rows = cut_mod.detect(rgb, key, expect=sh.cols,
+                             anchor=subject.raw.get("anchor", "centroid"))
+    keyed = Image.fromarray(cut_mod.keyed(rgb, key))
+    boxes = [b for r in rows for b in r.boxes]
+    frames = [keyed.crop((b.x, b.y, b.x + b.w, b.y + b.h)) for b in boxes]
+    anim = sh.anims[0] if sh.anims else sh.name
+
+    contact = prof.root / "art" / "review" / f"{sh.name}.png"
+    review_mod.contact_sheet(frames, contact)
+    prompt = review_mod.build_prompt(
+        subject.raw.get("description", ""), anim, len(frames))
+
+    console.print(f"[dim]reviewing[/dim] [bold]{sh.name}[/bold] "
+                  f"[dim]— {len(frames)} frames from {source.name}[/dim]")
+    console.print(f"[dim]contact sheet: {contact.relative_to(prof.root)}[/dim]")
+    if dry_run:
+        click.echo(prompt)
+        return
+
+    try:
+        notes = review_mod.ask(contact, prompt, model=model)
+    except review_mod.ReviewError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if not notes:
+        console.print("[green]the model found nothing.[/green] "
+                      "[dim]Worth a look anyway — it is a second opinion, "
+                      "not a replacement for one.[/dim]")
+        return
+
+    table = Table(header_style="bold", title="What the model sees")
+    table.add_column("frame", justify="right"); table.add_column("severity")
+    table.add_column("issue")
+    for n in sorted(notes, key=lambda n: (not n.high, n.frame if n.frame is not None else -1)):
+        table.add_row("all" if n.frame is None else str(n.frame + 1),
+                      f"[red]high[/red]" if n.high else "[yellow]low[/yellow]",
+                      n.issue)
+    console.print(table)
+
+    if not do_flag:
+        console.print("[dim]`--flag` writes these into art.yaml, so the next "
+                      "`art draw` is told to fix them.[/dim]")
+        return
+
+    issues = list(subject.raw.get("issues") or [])
+    added = 0
+    for n in notes:
+        if n.frame is None or not n.high:
+            continue
+        issues = [i for i in issues
+                  if not (i.get("anim") == anim and i.get("frame") == n.frame)]
+        issues.append({"anim": anim, "frame": n.frame, "note": n.issue})
+        added += 1
+    issues.sort(key=lambda i: (i["anim"], i["frame"]))
+    subject.raw["issues"] = issues
+    profile_mod.save(prof)
+    console.print(f"[green]flagged {added} frame(s)[/green] "
+                  f"[dim]— they ride into the next `art draw {sh.name}`[/dim]")
