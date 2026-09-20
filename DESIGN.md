@@ -1065,3 +1065,32 @@ The same shape applies to limbs: "four legs" is satisfied by a stretched pose
 with an extra stray stub. "EXACTLY FOUR, never more... no extra limb or stray
 stub anywhere -- a stretched pose must still have four" is the version that
 survives an extreme frame.
+
+## Editing a frame instead of regenerating a sheet
+
+Regenerating a sheet to remove one stray stub costs an image **and rerolls five
+frames that were already right**. That trade is bad often enough that the frame
+is editable where it is looked at: click it in the preview and it opens at its
+native resolution on a checkerboard, with an eraser, a size slider, undo and
+reset.
+
+A saved edit goes to `art/edits/<subject>/<anim>-<frame>.png` — **beside** the
+candidate, never inside it, so the generated sheet stays the untouched record of
+what actually came back. The preview prefers an edit where one exists and
+outlines that frame in green; reopening the preview picks up edits already on
+disk.
+
+The eraser alone covers most of what goes wrong at this stage, because the
+defects are additive: a leftover limb, a stray stub, a doubled tail. Removing is
+usually enough; drawing is not usually needed.
+
+## Flags had no way out, and no sign they were used
+
+Both reported, both true. A flag could be added from the preview and only
+removed from the CLI, and nothing on the page said what a flag was for. Each
+issue now carries a **remove** button, and the row prints how many flags it holds
+and that they will be sent as art direction on the next `art draw`.
+
+They were being used — `draw` folds them into the prompt as *"Fix these
+specifically and keep everything else identical"* — but a feature that gives no
+sign it is working is one nobody trusts, which is the same as not having it.

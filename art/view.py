@@ -77,6 +77,22 @@ PAGE = """<!DOCTYPE html>
   .issue { font-size:12px; color:var(--dim); display:flex; gap:8px; }
   .issue b { color:var(--accent); font-weight:600; font-variant-numeric:tabular-nums; }
   .flagged { outline:2px solid var(--accent); outline-offset:3px; border-radius:4px; }
+  .edited { outline:2px solid var(--good); outline-offset:3px; border-radius:4px; }
+  canvas { cursor:zoom-in; }
+  .issue button { font-size:11px; padding:1px 7px; border-radius:6px; }
+  .hint { color:var(--dim); font-size:11px; margin-top:6px; }
+  .ovl { position:fixed; inset:0; background:rgba(8,8,12,.86); z-index:50;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:12px; padding:20px; }
+  .ovl .sheetwrap { background:
+      conic-gradient(#d8d8d8 0 25%, #fff 0 50%, #d8d8d8 0 75%, #fff 0) 0 0/24px 24px;
+    border-radius:8px; box-shadow:0 10px 40px rgba(0,0,0,.5); overflow:auto;
+    max-width:94vw; max-height:70vh; }
+  .ovl canvas { cursor:crosshair; display:block; }
+  .ovlbar { display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+    background:var(--card); border:1px solid var(--line); border-radius:10px;
+    padding:10px 14px; }
+  .ovlbar .t { color:var(--fg); font-size:13px; }
   .fx { margin-top:10px; padding-top:10px; border-top:1px dashed var(--line);
     display:flex; flex-direction:column; gap:8px; }
   .fxrow { display:flex; gap:10px; align-items:center; flex-wrap:wrap;
@@ -158,6 +174,8 @@ for (const row of DATA.rows) {
     const cap = document.createElement('div'); cap.className = 'cap';
     cell.appendChild(cap);
     stage.appendChild(cell);
+    c.title = 'Click to clean this frame up by hand';
+    c.onclick = () => openEditor(row, v);
     players.push({ canvas:c, cap, variant:v, row });
   }
   el.appendChild(stage);
@@ -269,10 +287,123 @@ function renderIssues(row, el) {
   if (!box) { box = document.createElement('div'); box.className = 'issues';
     el.appendChild(box); }
   const mine = DATA.issues.filter(i => i.anim === row.name);
-  box.innerHTML = mine.map(i =>
-    `<div class="issue"><b>frame ${i.frame}</b><span>${
-      (i.note || '(no note)').replace(/[<>&]/g, c =>
-        ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</span></div>`).join('');
+  box.innerHTML = '';
+  for (const i of mine) {
+    const line = document.createElement('div'); line.className = 'issue';
+    const b = document.createElement('b'); b.textContent = 'frame ' + i.frame;
+    const t = document.createElement('span'); t.textContent = i.note || '(no note)';
+    const rm = document.createElement('button'); rm.textContent = 'remove';
+    rm.onclick = async () => {
+      rm.disabled = true;
+      try {
+        const r = await fetch('/unflag', { method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ anim: row.name, frame: i.frame }) });
+        if (!r.ok) throw new Error(await r.text());
+        DATA.issues = DATA.issues.filter(
+          x => !(x.anim === i.anim && x.frame === i.frame));
+        renderIssues(row, el);
+      } catch (e) { alert('Could not remove: ' + e.message); rm.disabled = false; }
+    };
+    line.appendChild(b); line.appendChild(t); line.appendChild(rm);
+    box.appendChild(line);
+  }
+  if (mine.length) {
+    const hint = document.createElement('div'); hint.className = 'hint';
+    hint.textContent = mine.length + ' flag(s) on this row will be sent to the '
+      + 'generator as art direction on the next `art draw ' + DATA.sheet + '`.';
+    box.appendChild(hint);
+  }
+}
+
+// --------------------------------------------------------------- editor --
+// Regenerating a sheet to remove one stray stub costs an image and rerolls
+// five frames that were already right. Erasing it by hand costs a few seconds
+// and touches nothing else, so the frame is editable where it is looked at.
+
+function openEditor(row, variant){
+  const idx = (+row.ui.scrub.value) % variant.frames.length;
+  const f = variant.frames[idx];
+  const src = images[variant.image];
+  if (!src) return;
+  setPlaying(false);
+
+  const ovl = document.createElement('div'); ovl.className = 'ovl';
+  const wrap = document.createElement('div'); wrap.className = 'sheetwrap';
+  const cv = document.createElement('canvas');
+  cv.width = f[2]; cv.height = f[3];
+  const g = cv.getContext('2d', { willReadFrequently: true });
+  // Start from whatever is currently shown for this frame: a previous edit if
+  // there is one, otherwise the region of the sheet.
+  const prior = DATA.edits[row.name + '-' + idx];
+  const start = () => {
+    g.clearRect(0, 0, cv.width, cv.height);
+    if (prior && images[prior]) g.drawImage(images[prior], 0, 0);
+    else g.drawImage(src, f[0], f[1], f[2], f[3], 0, 0, f[2], f[3]);
+  };
+  start();
+
+  // Fit to the screen but never below 1:1 detail -- the point is high
+  // resolution, so it scrolls rather than shrinking past readable.
+  const fit = Math.min((window.innerWidth * 0.9) / cv.width,
+                       (window.innerHeight * 0.62) / cv.height, 2);
+  cv.style.width = Math.round(cv.width * Math.max(fit, 0.5)) + 'px';
+  cv.style.height = Math.round(cv.height * Math.max(fit, 0.5)) + 'px';
+  wrap.appendChild(cv);
+
+  const undo = [];
+  const push = () => { undo.push(g.getImageData(0, 0, cv.width, cv.height));
+    if (undo.length > 24) undo.shift(); };
+
+  let size = Math.max(8, Math.round(cv.width / 26)), erasing = false;
+  const at = (e) => {
+    const r = cv.getBoundingClientRect();
+    return [(e.clientX - r.left) * cv.width / r.width,
+            (e.clientY - r.top) * cv.height / r.height];
+  };
+  const dab = (x, y) => {
+    g.save(); g.globalCompositeOperation = 'destination-out';
+    g.beginPath(); g.arc(x, y, size / 2, 0, Math.PI * 2); g.fill(); g.restore();
+  };
+  cv.onpointerdown = (e) => { push(); erasing = true; cv.setPointerCapture(e.pointerId);
+    dab(...at(e)); };
+  cv.onpointermove = (e) => { if (erasing) dab(...at(e)); };
+  cv.onpointerup = () => erasing = false;
+
+  const bar = document.createElement('div'); bar.className = 'ovlbar';
+  bar.innerHTML = `<span class="t"><b>${row.name}</b> frame ${idx}
+    · ${f[2]}×${f[3]}px · erase to clean up</span>`;
+  const mk = (label, fn) => { const b = document.createElement('button');
+    b.textContent = label; b.onclick = fn; bar.appendChild(b); return b; };
+  const sz = document.createElement('input');
+  sz.type = 'range'; sz.min = 4; sz.max = Math.round(cv.width / 5); sz.value = size;
+  sz.oninput = () => size = +sz.value;
+  bar.appendChild(sz);
+  mk('Undo', () => { const d = undo.pop(); if (d) g.putImageData(d, 0, 0); });
+  mk('Reset', () => { push(); start(); });
+  mk('Cancel', () => ovl.remove());
+  const save = mk('Save frame', async () => {
+    save.disabled = true;
+    try {
+      const r = await fetch('/edit', { method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ anim: row.name, frame: idx,
+                               png: cv.toDataURL('image/png') }) });
+      if (!r.ok) throw new Error(await r.text());
+      const { url } = await r.json();
+      const img = new Image();
+      img.onload = () => { images[url] = img;
+        DATA.edits[row.name + '-' + idx] = url; ovl.remove(); };
+      img.src = url + '?t=' + Date.now();
+    } catch (e) { alert('Could not save: ' + e.message); save.disabled = false; }
+  });
+  save.setAttribute('aria-pressed', 'true');
+
+  ovl.appendChild(wrap); ovl.appendChild(bar);
+  ovl.onclick = (e) => { if (e.target === ovl) ovl.remove(); };
+  addEventListener('keydown', function esc(e){
+    if (e.key === 'Escape') { ovl.remove(); removeEventListener('keydown', esc); } });
+  document.body.appendChild(ovl);
 }
 
 function stepRow(row, d){
@@ -297,6 +428,8 @@ addEventListener('keydown', e => {
 (async () => {
   for (const p of players)
     if (!images[p.variant.image]) images[p.variant.image] = await load(p.variant.image);
+  for (const url of Object.values(DATA.edits))
+    if (!images[url]) images[url] = await load(url);
   requestAnimationFrame(tick);
 })();
 
@@ -373,8 +506,12 @@ function draw(p){
   g.rotate(rot); g.scale(sScale, sScale);
   g.translate(-pivot, -(baseY - bobPx));
   g.globalAlpha = alpha;
-  g.drawImage(img, f[0], f[1], f[2], f[3], x, y - bobPx, w, h);
+  const editUrl = v.label === 'candidate' ? DATA.edits[p.row.name + '-' + idx] : null;
+  const edited = editUrl && images[editUrl];
+  if (edited) g.drawImage(edited, 0, 0, f[2], f[3], x, y - bobPx, w, h);
+  else g.drawImage(img, f[0], f[1], f[2], f[3], x, y - bobPx, w, h);
   g.restore();
+  c.classList.toggle('edited', !!edited);
   if (showGrid) { g.strokeStyle = 'rgba(128,128,128,.5)';
     g.setLineDash([3,3]); g.strokeRect(x, y, w, h); g.setLineDash([]); }
   const up = (DATA.height_tiles * device.px) / v.ref_h;

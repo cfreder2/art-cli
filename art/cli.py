@@ -666,6 +666,7 @@ def view(ctx, subject, candidate, port, no_open) -> None:
     scales them, so the comparison is the one the player would see.
     """
     import http.server, socketserver, threading, webbrowser
+    import shutil as shutil_mod
 
     prof = _load(ctx.obj["project"])
     if subject not in prof.subjects:
@@ -767,8 +768,19 @@ def view(ctx, subject, candidate, port, no_open) -> None:
     except fx_mod.EffectError as exc:
         raise click.ClickException(f"art.yaml effects: {exc}") from exc
 
+    # Hand edits already saved for this subject, so a reopened preview shows
+    # the cleaned frames rather than the raw ones.
+    edits_dir = prof.root / "art" / "edits" / subject
+    edits = {}
+    if edits_dir.is_dir():
+        for f in sorted(edits_dir.glob("*.png")):
+            shutil_mod.copy2(f, serve / f"edit-{f.name}")
+            edits[f.stem] = f"edit-{f.name}"
+
     data = {"devices": view_mod.device_list(),
             "subject": subject,
+            "sheet": (pl.sheets[0].name if candidate and pl.sheets else subject),
+            "edits": edits,
             "issues": list(sub.raw.get("issues") or []),
             "effects": {r["name"]: fx_mod.for_anim(normalised, r["name"]) for r in rows},
             "catalogue": fx_mod.catalogue(),
@@ -794,6 +806,10 @@ def view(ctx, subject, candidate, port, no_open) -> None:
             """
             if self.path == "/effects":
                 self._save_effects(); return
+            if self.path == "/unflag":
+                self._unflag(); return
+            if self.path == "/edit":
+                self._save_edit(); return
             if self.path != "/flag":
                 self.send_error(404); return
             try:
@@ -813,6 +829,52 @@ def view(ctx, subject, candidate, port, no_open) -> None:
             console.print(f"[yellow]flagged[/yellow] {subject}/{anim} frame {frame}"
                           + (f" — {note}" if note else ""))
             self.send_response(204); self.end_headers()
+
+        def _unflag(self):
+            try:
+                body = self._body()
+                anim, frame = str(body["anim"]), int(body["frame"])
+            except Exception as exc:
+                self.send_error(400, str(exc)); return
+            kept = [i for i in (sub.raw.get("issues") or [])
+                    if not (i.get("anim") == anim and i.get("frame") == frame)]
+            sub.raw["issues"] = kept
+            profile_mod.save(prof)
+            console.print(f"[dim]unflagged {subject}/{anim} frame {frame}[/dim]")
+            self.send_response(204); self.end_headers()
+
+        def _save_edit(self):
+            """Keep a frame someone cleaned up by hand.
+
+            Regenerating a sheet to remove one stray stub costs an image and
+            rerolls five frames that were already right. The edit is stored per
+            frame, beside the candidate rather than inside it, so the generated
+            sheet stays the untouched record of what came back.
+            """
+            import base64
+            try:
+                body = self._body()
+                anim, frame = str(body["anim"]), int(body["frame"])
+                raw = str(body["png"]).split(",", 1)[1]
+                png = base64.b64decode(raw)
+            except Exception as exc:
+                self.send_error(400, f"bad edit: {exc}"); return
+            if not png.startswith(b"\x89PNG"):
+                self.send_error(400, "not a PNG"); return
+
+            name = f"{anim}-{frame}.png"
+            dest = prof.root / "art" / "edits" / subject / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(png)
+            served = serve / f"edit-{name}"
+            served.write_bytes(png)
+            console.print(f"[green]edited[/green] {subject}/{anim} frame {frame} "
+                          f"[dim]→ {dest.relative_to(prof.root)}[/dim]")
+            payload = __import__("json").dumps({"url": f"edit-{name}"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers(); self.wfile.write(payload)
 
         def _save_effects(self):
             try:
