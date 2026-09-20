@@ -759,11 +759,6 @@ def view(ctx, subject, candidates, port, no_open) -> None:
     sub = prof.subjects[subject]
     source = sub.raw.get("source") or {}
     prefix = source.get("prefix", "")
-    first_sheet = next(iter(sub.sheets.values()), None) if sub.sheets else None
-    if isinstance(first_sheet, dict):
-        anim_names = list(first_sheet.get("anims") or [])
-    else:
-        anim_names = list(first_sheet or [])
 
     serve = Path(__import__("tempfile").mkdtemp(prefix="art-view-"))
     images, per_row = {}, {}
@@ -792,40 +787,42 @@ def view(ctx, subject, candidates, port, no_open) -> None:
                     if v["label"] == "today":
                         v["ref_h"] = ref
 
-    # Every version to compare, in the order they should read.
+    # Every version to compare. A subject now has one sheet PER ANIMATION, so
+    # each source carries its own layout -- taking the names from the first
+    # sheet and applying them to all of them piled nine animations onto one row.
     plan_for = plan_subject(prof, sub, groups)
-    expect = plan_for.sheets[0].cols if plan_for.sheets else None
-    wrapped = plan_for.sheets[0].wrapped if plan_for.sheets else 0
+    by_name = {x.name: x for x in plan_for.sheets}
 
-    sources: list[tuple[str, Path]] = []
+    sources: list[tuple[str, Path, object]] = []
     accepted = (sub.raw.get("accepted") or {})
     for sheet_name, rec in accepted.items():
         f = prof.root / rec.get("file", "")
-        if f.is_file():
-            sources.append((f"accepted (#{rec.get('candidate', '?')})", f))
+        sh = by_name.get(sheet_name)
+        if f.is_file() and sh is not None:
+            sources.append((sheet_name, f, sh))
     for c in candidates:
-        sources.append((c.stem, c))
+        sh = by_name.get(c.stem.rsplit("-", 1)[0]) or next(iter(by_name.values()), None)
+        if sh is not None:
+            sources.append((c.stem, c, sh))
     if not sources:
         pool = sorted((prof.root / "art" / "candidates").glob(f"{subject}*.png"))
         if pool:
-            sources.append((pool[-1].stem, pool[-1]))
+            sh = by_name.get(pool[-1].stem.rsplit("-", 1)[0]) or next(iter(by_name.values()), None)
+            if sh is not None:
+                sources.append((pool[-1].stem, pool[-1], sh))
 
     seen: set[Path] = set()
-    for n, (label, path) in enumerate(sources):
+    for n, (label, path, sh) in enumerate(sources):
         if path.resolve() in seen:
             continue
         seen.add(path.resolve())
         served = f"version{n}.png"
         detected, short, extra = _candidate_rows(
-            path, backdrop_for(prof, sub), anim_names, expect,
-            serve / served, wrapped=wrapped)
+            path, backdrop_for(prof, sub), sh.anims, sh.cols,
+            serve / served, wrapped=sh.wrapped)
         if short:
-            console.print(f"[yellow]{label}: incomplete rows[/yellow] "
-                          + ", ".join(short))
-        if extra:
-            console.print(f"[yellow]{label}: {len(extra)} unnamed row(s)[/yellow]")
-        ref = next((v[0][3] for k, v in detected.items() if k == "idle"),
-                   next(iter(detected.values()))[0][3] if detected else 1)
+            console.print(f"[yellow]{label}: incomplete rows[/yellow] " + ", ".join(short))
+        ref = next(iter(detected.values()))[0][3] if detected else 1
         for name, frames in detected.items():
             per_row.setdefault(name, []).append(
                 {"label": label, "image": served, "frames": frames, "ref_h": ref})
@@ -834,10 +831,14 @@ def view(ctx, subject, candidates, port, no_open) -> None:
         raise click.ClickException("Nothing to preview: no atlas entry and no candidate.")
     rows = []
 
+    # Rows with something to compare first, then in the order the profile
+    # lists its animations, so the sheet order and the page order agree.
+    authored = [a for sh in plan_for.sheets for a in sh.anims]
+
     def order(item):
         name = item[0]
         has_new = len(item[1]) > 1
-        rank = anim_names.index(name) if name in anim_names else len(anim_names)
+        rank = authored.index(name) if name in authored else len(authored)
         return (0 if has_new else 1, rank, name)
 
     rows = []
