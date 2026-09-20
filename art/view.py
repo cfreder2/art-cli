@@ -328,8 +328,21 @@ function draw(p){
   // reference frame, with lift applied per frame.
   const scale = (DATA.height_tiles * device.px) / v.ref_h;
   const w = f[2] * scale, h = f[3] * scale, lift = f[4] * scale;
+  // Place by the frame's ANCHOR -- the middle of its footprint -- not by the
+  // middle of its bounding box. A tail streaming out behind lengthens the box
+  // without moving the character, and centring the box would swing her body
+  // back and forth. Legacy frames carry no anchor, so they fall back to the
+  // centring the old atlas assumed.
+  const anchorOf = (fr) => (fr.length > 5 ? fr[5] : fr[2] / 2) * scale;
+  const a = anchorOf(f);
+  // Wide enough for the whole cycle, so the canvas itself does not shift.
+  let left = 0, right = 0;
+  for (const fr of frames) {
+    left = Math.max(left, anchorOf(fr));
+    right = Math.max(right, fr[2] * scale - anchorOf(fr));
+  }
   const boxH = DATA.height_tiles * device.px * 1.7;
-  const cw = Math.max(90, Math.ceil(w) + 24), ch = Math.ceil(boxH) + 16;
+  const cw = Math.max(90, Math.ceil(left + right) + 24), ch = Math.ceil(boxH) + 16;
   if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch;
     c.style.width = cw + 'px'; c.style.height = ch + 'px'; }
   g.clearRect(0, 0, cw, ch);
@@ -345,15 +358,20 @@ function draw(p){
   if (fx.bob)     bobPx = fx.bob.amount * device.px * wave(fx.bob);
   if (fx.throb)   alpha = 1 - fx.throb.amount * (0.5 + 0.5 * wave(fx.throb));
   if (showBase) { g.strokeStyle = 'rgba(184,51,106,.55)'; g.lineWidth = 1;
-    g.beginPath(); g.moveTo(0, baseY + .5); g.lineTo(cw, baseY + .5); g.stroke(); }
-  const x = (cw - w) / 2, y = baseY - h - lift;
+    g.beginPath(); g.moveTo(0, baseY + .5); g.lineTo(cw, baseY + .5); g.stroke();
+    // The anchor line: her x position. If the body drifts off it, the sprite
+    // will slide in the game.
+    g.strokeStyle = 'rgba(80,140,220,.6)';
+    g.beginPath(); g.moveTo(left + 12.5, 0); g.lineTo(left + 12.5, ch); g.stroke(); }
+  const x = left + 12 - a, y = baseY - h - lift;
   g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
   g.save();
   // Anchored at the feet: scale swells the sprite upward and rotation pivots
   // where it meets the ground, so neither lifts it off.
-  g.translate(cw / 2, baseY - bobPx);
+  const pivot = left + 12;
+  g.translate(pivot, baseY - bobPx);
   g.rotate(rot); g.scale(sScale, sScale);
-  g.translate(-cw / 2, -(baseY - bobPx));
+  g.translate(-pivot, -(baseY - bobPx));
   g.globalAlpha = alpha;
   g.drawImage(img, f[0], f[1], f[2], f[3], x, y - bobPx, w, h);
   g.restore();

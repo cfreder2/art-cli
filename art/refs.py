@@ -27,13 +27,14 @@ from pathlib import Path
 
 from art.profile import Profile, Subject
 
-ROLES = ("style", "identity", "revise", "pose")
+ROLES = ("style", "identity", "template", "revise", "pose")
 
 # When one file arrives under two roles, the more specific one wins. Sir
 # Croaks' sheet is a style benchmark for the whole game AND the statement of
 # who Sir Croaks is; attaching it twice wastes an image slot, and letting
 # "style" win would tell the model to ignore the very subject it is drawing.
-ROLE_PRIORITY = {"style": 0, "pose": 1, "identity": 2, "revise": 3}
+ROLE_PRIORITY = {"style": 0, "pose": 1, "identity": 2, "template": 3,
+                 "revise": 4}
 
 # What the prompt says about each role, once the images are numbered.
 ROLE_INSTRUCTION = {
@@ -45,6 +46,12 @@ ROLE_INSTRUCTION = {
                 "copy its poses, its framing or its resolution: the poses are "
                 "specified above, and where they differ from this image the "
                 "description wins",
+    "template": "this is the LAYOUT to draw into, at the exact canvas size. Its "
+                "background colour is the backdrop to use. Draw one pose per "
+                "cell, feet resting ON each cell's groundline, body straddling "
+                "each cell's vertical anchor mark. The grey guide lines are "
+                "instructions, NOT artwork: your output must contain no grey "
+                "lines, no marks and no cell borders of any kind",
     "revise": "this is the sheet being changed. Keep every row not named below "
               "identical, including costume and palette",
     "pose": "follow its LAYOUT and POSING only -- the gait, the timing, where "

@@ -27,6 +27,7 @@ from art.refs import resolve as resolve_refs
 from art import draw as draw_mod
 from art import effects as fx_mod
 from art import seams as seams_mod
+from art import template as tpl_mod
 from art.prompt import build as build_prompt
 from art import cut as cut_mod
 from art import view as view_mod
@@ -956,3 +957,29 @@ def effects_cmd(ctx, subject) -> None:
                     ", ".join(f'{p["name"]} ({p["low"]}–{p["high"]}{p["unit"]})'
                               for p in e["params"]), e["help"])
     console.print(cat)
+
+
+# ------------------------------------------------------------ template --
+
+@main.command()
+@click.argument("sheet")
+@click.option("--anchor", default=0.5, show_default=True,
+              help="Where in each cell the standing mark sits, 0..1 across.")
+@click.pass_context
+def template(ctx, sheet, anchor) -> None:
+    """Draw a guide sheet for a generation to draw into.
+
+    Cells, a groundline per cell, and a vertical mark showing where the
+    character stands. The mark is the point of it: the horizontal standing
+    position is the one thing `cut` cannot recover afterwards without guessing.
+    """
+    prof = _load(ctx.obj["project"])
+    subject, sh, pl = _sheet_for(prof, sheet)
+    out = prof.root / "art" / "templates" / f"{sh.name}.png"
+    t = tpl_mod.build(out, prof.canvas, sh.cols, sh.rows,
+                      cut_mod.hex_to_rgb(backdrop_for(prof, subject)), anchor)
+    console.print(f"[green]wrote[/green] {out}  "
+                  f"[dim]{t.cols}×{t.rows}, cells {t.cell_w}×{t.cell_h}, "
+                  f"groundline at {int(t.baseline_y * 100)}% of each cell[/dim]")
+    console.print("[dim]point the subject at it: "
+                  f"reference: {{template: art/templates/{sh.name}.png}}[/dim]")

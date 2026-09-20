@@ -1009,3 +1009,59 @@ Laying one animation across a grid risks the second row being treated as a
 separate drawing. Masie's frames 4–6 came back slightly chunkier, with a
 different tail treatment, than 1–3. Worth watching; a single row would not have
 this problem, and cannot fit her.
+
+---
+
+# Two things trimmed frames cannot carry, and a template that fixes one
+
+## A frame needs a horizontal anchor, not just a vertical one
+
+`lift` says where the ground is. Nothing said where the character *stood*, so
+the game placed each frame by centring its bounding box -- `-w / 2` at
+`game.js:728`. That is correct only while every frame is the same width.
+
+AXI's current run frames are 110, 114, 113, 114, 109, 109 -- a 5px spread, so
+centring has never caused trouble. Masie's redrawn run stretches from 304px to
+473px as her tail streams out behind her, and centring those boxes would swing
+her body **59px back and forth every cycle**. She would slide as she ran.
+
+So a frame carries an anchor: the middle of its **footprint**, the lowest
+slice where it touches the ground, rather than the middle of a box a tail can
+lengthen. `[x, y, w, h, lift]` becomes `[x, y, w, h, lift, anchor]`, and the
+game draws the anchor at the character's x instead of the box's middle. A
+legacy frame has no sixth number and falls back to centring, which is what it
+was drawn for.
+
+This is a `game.js` change when `pack` lands: `-w / 2` becomes `-anchor`.
+
+## A template makes the anchor known instead of inferred
+
+The footprint heuristic works, but it is a guess about where a character
+stands. Giving the generator a guide sheet to draw **into** makes it a fact.
+
+`art template <sheet>` writes the canvas at its real size with cell borders, a
+groundline in each cell, and a vertical mark where the character stands. The
+brief then says: one pose per cell, feet on the line, body straddling the mark.
+
+The risk was that a generator redraws its reference and bakes the guides into
+the art. Measured on the first attempt: **0.02%** of the output sat on the
+guide colour. It drew into the template rather than copying it. The guides are
+a single flat grey nothing else uses precisely so that failure is measurable
+rather than something to squint for -- `guide_remnants()` reports it.
+
+What the template bought beyond placement: the two grid rows came back
+consistent with each other, which the previous wrapped-grid attempt did not
+manage, and the frames no longer crowd their neighbours.
+
+## Anatomy has to be described as shape, not as name
+
+"A broad flat tail fin" produced a thin tube with a fan on the end for three
+generations. An axolotl's tail is a laterally flattened paddle with the fin
+running its whole length from the hips. Saying that -- *"think of a broad leaf
+or an oar blade lying on its side"*, plus explicitly what it is **not** --
+fixed it in one.
+
+The same shape applies to limbs: "four legs" is satisfied by a stretched pose
+with an extra stray stub. "EXACTLY FOUR, never more... no extra limb or stray
+stub anywhere -- a stretched pose must still have four" is the version that
+survives an extreme frame.

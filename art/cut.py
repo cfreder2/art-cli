@@ -29,6 +29,11 @@ import numpy as np
 MIN_GAP_PX = 6
 
 
+# The share of a frame's height, measured from the bottom, that counts as its
+# footprint. The contact patch, not the whole silhouette.
+FOOTPRINT = 0.18
+
+
 @dataclass
 class Box:
     x: int
@@ -36,9 +41,10 @@ class Box:
     w: int
     h: int
     lift: int = 0      # how far this frame rides above its row's baseline
+    anchor: int = 0    # where the character stands, measured from the left edge
 
     def as_list(self) -> list[int]:
-        return [self.x, self.y, self.w, self.h, self.lift]
+        return [self.x, self.y, self.w, self.h, self.lift, self.anchor]
 
 
 @dataclass
@@ -167,8 +173,32 @@ def find_rows(alpha: np.ndarray, threshold: float = 0.35,
         floor = max(b.y + b.h for b in boxes)
         for b in boxes:
             b.lift = floor - (b.y + b.h)
+            b.anchor = _footprint_centre(solid, b)
         rows.append(Row(n, boxes, gap_used, expect))
     return rows
+
+
+def _footprint_centre(solid: np.ndarray, b: Box) -> int:
+    """Where the character stands, horizontally, within its own frame.
+
+    `lift` says where the ground is vertically. Nothing said where it was
+    HORIZONTALLY, so a frame was placed by centring its bounding box -- which
+    is fine only while every frame is the same width. Masie's run stretches
+    from 304px to 473px as her tail streams out, and centring those boxes
+    swings her body 59px back and forth every cycle.
+
+    So the anchor is the middle of her FOOTPRINT -- the lowest slice of the
+    frame, where she touches the ground -- rather than the middle of a box a
+    tail can lengthen. It is the point the game should place at her x position.
+    """
+    patch = solid[b.y:b.y + b.h, b.x:b.x + b.w]
+    if patch.size == 0:
+        return b.w // 2
+    cut = max(1, int(patch.shape[0] * (1 - FOOTPRINT)))
+    xs = np.where(patch[cut:].any(axis=0))[0]
+    if xs.size == 0:
+        xs = np.where(patch.any(axis=0))[0]
+    return int((xs[0] + xs[-1]) // 2) if xs.size else b.w // 2
 
 
 def detect(rgb: np.ndarray, key: tuple[int, int, int],
