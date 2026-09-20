@@ -421,8 +421,11 @@ function openEditor(row, variant){
                        (window.innerHeight * 0.62) / cv.height, 2);
   cv.style.width = Math.round(cv.width * Math.max(fit, 0.5)) + 'px';
   cv.style.height = Math.round(cv.height * Math.max(fit, 0.5)) + 'px';
-  wrap.appendChild(cv);
+  wrap.style.position = 'relative';
+  wrap.appendChild(cv); wrap.appendChild(guide);
 
+  let mode = 'erase', shiftX = (DATA.nudges[row.name] || {})[idx]?.[0]
+             || (DATA.nudges[row.name] || {})[String(idx)]?.[0] || 0;
   const undo = [];
   const push = () => { undo.push(g.getImageData(0, 0, cv.width, cv.height));
     if (undo.length > 24) undo.shift(); };
@@ -437,16 +440,58 @@ function openEditor(row, variant){
     g.save(); g.globalCompositeOperation = 'destination-out';
     g.beginPath(); g.arc(x, y, size / 2, 0, Math.PI * 2); g.fill(); g.restore();
   };
-  cv.onpointerdown = (e) => { push(); erasing = true; cv.setPointerCapture(e.pointerId);
-    dab(...at(e)); };
-  cv.onpointermove = (e) => { if (erasing) dab(...at(e)); };
-  cv.onpointerup = () => erasing = false;
+  // Align mode drags the registration point rather than the pixels: the
+  // drawing is right, it is hung a few pixels off its neighbours.
+  const guide = document.createElement('canvas');
+  guide.width = cv.width; guide.height = cv.height;
+  guide.style.cssText = 'position:absolute;pointer-events:none;'
+    + `width:${cv.style.width};height:${cv.style.height}`;
+  const gg = guide.getContext('2d');
+  const baseAnchor = f.length > 5 ? f[5] : f[2] / 2;
+  const drawGuide = () => {
+    gg.clearRect(0, 0, guide.width, guide.height);
+    if (mode !== 'align') return;
+    const x = baseAnchor + shiftX;
+    gg.strokeStyle = 'rgba(80,140,220,.95)'; gg.lineWidth = 2;
+    gg.beginPath(); gg.moveTo(x, 0); gg.lineTo(x, guide.height); gg.stroke();
+    gg.strokeStyle = 'rgba(0,0,0,.25)';
+    gg.beginPath(); gg.moveTo(baseAnchor, 0); gg.lineTo(baseAnchor, guide.height); gg.stroke();
+  };
+
+  let dragFrom = null;
+  cv.onpointerdown = (e) => {
+    cv.setPointerCapture(e.pointerId);
+    if (mode === 'align') { dragFrom = [at(e)[0], shiftX]; return; }
+    push(); erasing = true; dab(...at(e));
+  };
+  cv.onpointermove = (e) => {
+    if (mode === 'align') {
+      if (dragFrom) { shiftX = Math.round(dragFrom[1] + (at(e)[0] - dragFrom[0]));
+        drawGuide(); lbl.textContent = `shift ${shiftX >= 0 ? '+' : ''}${shiftX}px`; }
+      return;
+    }
+    if (erasing) dab(...at(e));
+  };
+  cv.onpointerup = () => { erasing = false; dragFrom = null; };
 
   const bar = document.createElement('div'); bar.className = 'ovlbar';
   bar.innerHTML = `<span class="t"><b>${row.name}</b> frame ${idx}
     · ${f[2]}×${f[3]}px · erase to clean up</span>`;
   const mk = (label, fn) => { const b = document.createElement('button');
     b.textContent = label; b.onclick = fn; bar.appendChild(b); return b; };
+  const lbl = document.createElement('span'); lbl.className = 't';
+  const erase = mk('Erase', () => setMode('erase'));
+  const align = mk('Align', () => setMode('align'));
+  const setMode = (m) => { mode = m;
+    erase.setAttribute('aria-pressed', String(m === 'erase'));
+    align.setAttribute('aria-pressed', String(m === 'align'));
+    cv.style.cursor = m === 'align' ? 'ew-resize' : 'crosshair';
+    lbl.textContent = m === 'align'
+      ? `shift ${shiftX >= 0 ? '+' : ''}${shiftX}px  — drag sideways`
+      : 'erase to clean up';
+    drawGuide(); };
+  bar.appendChild(lbl);
+  setMode('erase');
   const sz = document.createElement('input');
   sz.type = 'range'; sz.min = 4; sz.max = Math.round(cv.width / 5); sz.value = size;
   sz.oninput = () => size = +sz.value;
@@ -462,6 +507,14 @@ function openEditor(row, variant){
         body: JSON.stringify({ anim: row.name, frame: idx,
                                png: cv.toDataURL('image/png') }) });
       if (!r.ok) throw new Error(await r.text());
+      if (mode === 'align' || shiftX) {
+        await fetch('/nudge', { method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ anim: row.name, frame: idx, dx: shiftX, dy: 0 }) });
+        DATA.nudges[row.name] = DATA.nudges[row.name] || {};
+        if (shiftX) DATA.nudges[row.name][idx] = [shiftX, 0];
+        else delete DATA.nudges[row.name][idx];
+      }
       const { url } = await r.json();
       const img = new Image();
       img.onload = () => { images[url] = img;
@@ -551,14 +604,19 @@ function draw(p){
   // without moving the character, and centring the box would swing her body
   // back and forth. Legacy frames carry no anchor, so they fall back to the
   // centring the old atlas assumed.
-  const anchorOf = (fr) => (fr.length > 5 ? fr[5] : fr[2] / 2) * scale;
-  const a = anchorOf(f);
+  const nudgeOf = (i) => {
+    const per = (DATA.nudges || {})[p.row.name] || {};
+    return (per[i] || per[String(i)] || [0, 0]);
+  };
+  const anchorOf = (fr, i) => ((fr.length > 5 ? fr[5] : fr[2] / 2)
+                               + (v.label === DATA.editable ? nudgeOf(i)[0] : 0)) * scale;
+  const a = anchorOf(f, idx);
   // Wide enough for the whole cycle, so the canvas itself does not shift.
   let left = 0, right = 0;
-  for (const fr of frames) {
-    left = Math.max(left, anchorOf(fr));
-    right = Math.max(right, fr[2] * scale - anchorOf(fr));
-  }
+  frames.forEach((fr, i) => {
+    left = Math.max(left, anchorOf(fr, i));
+    right = Math.max(right, fr[2] * scale - anchorOf(fr, i));
+  });
   const boxH = DATA.height_tiles * device.px * 1.7;
   const cw = Math.max(90, Math.ceil(left + right) + 24), ch = Math.ceil(boxH) + 16;
   if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch;

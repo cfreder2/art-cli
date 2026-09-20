@@ -33,6 +33,24 @@ MIN_GAP_PX = 6
 # footprint. The contact patch, not the whole silhouette.
 FOOTPRINT = 0.18
 
+# How a frame's standing point is found. This is the registration point of
+# traditional animation -- the peg hole every drawing lines up on -- and
+# choosing it badly is visible as jitter in whatever it is NOT tracking.
+#
+#   centroid   the horizontal centre of mass. What a rigged character's root
+#              is: the hips travel smoothly and the limbs move relative to
+#              them. The default, because it is the smoothest thing on the
+#              character by definition.
+#   footprint  the middle of the contact patch. Correct for a standing pose,
+#              wrong for a run: the feet are the part that moves MOST, so
+#              holding them still swings the body and the head. Measured on
+#              Masie's run it moved her head 35px a cycle against the
+#              centroid's 12px.
+#   leading    the front edge. For something led by its nose.
+#   box        the middle of the bounding box: what a sheet of equal-width
+#              frames implicitly used.
+ANCHOR_MODES = ("centroid", "footprint", "leading", "box")
+
 
 @dataclass
 class Box:
@@ -144,7 +162,8 @@ def _columns_in_band(present: np.ndarray, min_gap: int,
 
 def find_rows(alpha: np.ndarray, threshold: float = 0.35,
               min_gap: int = MIN_GAP_PX,
-              expect: int | None = None) -> list[Row]:
+              expect: int | None = None,
+              anchor: str = "centroid") -> list[Row]:
     """Rows of frames, and the frames in each, from an alpha channel.
 
     `expect` is how many frames each row should hold, which the plan knows. A
@@ -173,39 +192,58 @@ def find_rows(alpha: np.ndarray, threshold: float = 0.35,
         floor = max(b.y + b.h for b in boxes)
         for b in boxes:
             b.lift = floor - (b.y + b.h)
-            b.anchor = _footprint_centre(solid, b)
+            b.anchor = anchor_of(solid, b, anchor)
         rows.append(Row(n, boxes, gap_used, expect))
     return rows
 
 
-def _footprint_centre(solid: np.ndarray, b: Box) -> int:
-    """Where the character stands, horizontally, within its own frame.
+def anchor_of(solid: np.ndarray, b: Box, mode: str = "centroid") -> int:
+    """Where the character registers, horizontally, within its own frame.
 
-    `lift` says where the ground is vertically. Nothing said where it was
-    HORIZONTALLY, so a frame was placed by centring its bounding box -- which
-    is fine only while every frame is the same width. Masie's run stretches
-    from 304px to 473px as her tail streams out, and centring those boxes
-    swings her body 59px back and forth every cycle.
-
-    So the anchor is the middle of her FOOTPRINT -- the lowest slice of the
-    frame, where she touches the ground -- rather than the middle of a box a
-    tail can lengthen. It is the point the game should place at her x position.
+    `lift` says where the ground is vertically; this is the horizontal half,
+    and getting it wrong is what a viewer sees as the head jerking back and
+    forth. See ANCHOR_MODES for why the default is the centre of mass.
     """
     patch = solid[b.y:b.y + b.h, b.x:b.x + b.w]
-    if patch.size == 0:
+    if patch.size == 0 or not patch.any():
         return b.w // 2
-    cut = max(1, int(patch.shape[0] * (1 - FOOTPRINT)))
-    xs = np.where(patch[cut:].any(axis=0))[0]
-    if xs.size == 0:
-        xs = np.where(patch.any(axis=0))[0]
-    return int((xs[0] + xs[-1]) // 2) if xs.size else b.w // 2
+    if mode == "box":
+        return b.w // 2
+    if mode == "leading":
+        return int(np.where(patch.any(axis=0))[0][-1])
+    if mode == "footprint":
+        cut = max(1, int(patch.shape[0] * (1 - FOOTPRINT)))
+        xs = np.where(patch[cut:].any(axis=0))[0]
+        if xs.size == 0:
+            xs = np.where(patch.any(axis=0))[0]
+        return int((xs[0] + xs[-1]) // 2)
+    return int(round(np.argwhere(patch)[:, 1].mean()))
 
 
 def detect(rgb: np.ndarray, key: tuple[int, int, int],
-           expect: int | None = None) -> tuple[np.ndarray, list[Row]]:
+           expect: int | None = None,
+           anchor: str = "centroid") -> tuple[np.ndarray, list[Row]]:
     """(alpha, rows) for a sheet drawn on a flat key colour."""
     alpha = alpha_from_colour(rgb, key)
-    return alpha, find_rows(alpha, expect=expect)
+    return alpha, find_rows(alpha, expect=expect, anchor=anchor)
+
+
+def apply_nudges(boxes: list[Box], nudges: dict) -> None:
+    """Shift individual frames' registration by hand.
+
+    An automatic anchor gets a cycle most of the way -- the centre of mass took
+    Masie's head jitter from 35px to 12px -- and the last of it is per-frame,
+    because one drawing is simply further forward than its neighbours. That is
+    not something a rule can find; it is the judgement a traditional animator
+    made at the peg bar, sliding a drawing until its arc ran smooth.
+    """
+    for i, b in enumerate(boxes):
+        n = nudges.get(i) or nudges.get(str(i))
+        if not n:
+            continue
+        dx, dy = (list(n) + [0, 0])[:2]
+        b.anchor += int(dx)
+        b.lift += int(dy)
 
 
 def keyed(rgb: np.ndarray, key: tuple[int, int, int]) -> np.ndarray:

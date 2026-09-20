@@ -1278,3 +1278,68 @@ number are drawn exactly as before, which is most of the atlas.
 regenerated the atlas from the old concept sheets and thrown away the redraw.
 That call is commented out, with the reason, and the committed atlas is the
 artifact now — as designed several turns ago, when it was still theoretical.
+
+---
+
+# Registration, and the head jerking back and forth
+
+A sprite's anchor is the **registration point** of traditional animation: the
+peg hole every drawing lines up on. Choose it badly and the error shows up as
+jitter in whatever it is *not* tracking.
+
+`cut` anchored on the **footprint** — the middle of the contact patch — which is
+correct for a standing pose and wrong for a run, because **the feet are the part
+that moves most.** Holding them still swings everything else. Measured on
+Masie's ten-frame run, her head travelled **35px** per cycle relative to the
+anchor, on a character drawn 246px tall. That is the whiplash.
+
+## What a rigged character does, and why the centre of mass wins
+
+In rigged animation the root is the **hips**, not the feet: the pelvis travels
+smoothly and the limbs are solved relative to it. Feet plant and lift *against*
+the root; they never define it. A sprite's anchor is the same decision, so the
+default is now the horizontal **centre of mass**, which is the smoothest thing
+on a character by definition.
+
+Measured across the same cycle, head travel relative to each candidate:
+
+| anchor | head swing |
+| --- | --- |
+| footprint | 35.1px |
+| box centre | 38.0px |
+| leading edge | 25.0px |
+| **centroid** | **11.9px** |
+
+`anchor: centroid | footprint | leading | box` is per subject, because which
+landmark is stable is a fact about the character.
+
+## The last of it is per-frame, and always was
+
+A rule gets a cycle most of the way. The remaining 12px was almost entirely
+**one frame** sitting further forward than its neighbours — not something a
+formula can find, and exactly the judgement an animator made at the peg bar,
+sliding a drawing until its arc ran smooth.
+
+So a frame carries a nudge, stored in `art.yaml` and applied by `pack`:
+
+```yaml
+masie:
+  anchor: centroid
+  nudge: {run: {0: [2, 0], 3: [-5, 0], 4: [3, 0], …}}
+```
+
+The sheet is never rewritten. The drawing was right; it was hung a few pixels
+off. `art view` has an **Align** mode beside the eraser — drag sideways and the
+registration line moves with a ghost of where it started.
+
+## Smooth the arc, do not flatten it
+
+The temptation is to pin the head still. That is wrong: a real run has a small
+head bob, and removing it entirely reads as rigid. Animators talk about every
+part travelling a **smooth arc** — jitter is a point leaving its arc, not a
+point moving.
+
+So the nudges were computed against a *smoothed* version of the head's own
+path, not a constant. Total swing 35.1 → 11.8 → **5.7px**, and the largest jump
+between neighbouring frames — which is what "whiplash" actually is — is
+**2.9px**, about 1% of her height.

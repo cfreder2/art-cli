@@ -807,6 +807,8 @@ def view(ctx, subject, candidates, port, no_open) -> None:
     data = {"devices": view_mod.device_list(),
             "subject": subject,
             "editable": editable,
+            "nudges": (sub.raw.get("nudge") or {}),
+            "anchorMode": sub.raw.get("anchor", "centroid"),
             "available": [
                 {"file": str(f.relative_to(prof.root)), "label": f.stem}
                 for f in sorted((prof.root / "art" / "candidates").glob(f"{subject}*.png"))
@@ -845,6 +847,8 @@ def view(ctx, subject, candidates, port, no_open) -> None:
                 self._save_edit(); return
             if self.path == "/compare":
                 self._add_version(); return
+            if self.path == "/nudge":
+                self._save_nudge(); return
             if self.path != "/flag":
                 self.send_error(404); return
             try:
@@ -910,6 +914,35 @@ def view(ctx, subject, candidates, port, no_open) -> None:
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers(); self.wfile.write(payload)
+
+        def _save_nudge(self):
+            """Shift one frame's registration point.
+
+            Stored per frame in art.yaml and applied by `pack`, so the sheet
+            itself is never rewritten -- the drawing is fine, it was hung a few
+            pixels off.
+            """
+            try:
+                body = self._body()
+                anim, frame = str(body["anim"]), int(body["frame"])
+                dx, dy = int(body.get("dx", 0)), int(body.get("dy", 0))
+            except Exception as exc:
+                self.send_error(400, str(exc)); return
+            block = dict(sub.raw.get("nudge") or {})
+            per = dict(block.get(anim) or {})
+            if dx or dy:
+                per[str(frame)] = [dx, dy]
+            else:
+                per.pop(str(frame), None)
+            if per:
+                block[anim] = per
+            else:
+                block.pop(anim, None)
+            sub.raw["nudge"] = block
+            profile_mod.save(prof)
+            console.print(f"[dim]nudged {subject}/{anim} frame {frame} "
+                          f"by {dx:+d},{dy:+d}[/dim]")
+            self.send_response(204); self.end_headers()
 
         def _add_version(self):
             """Serve one more sheet to compare against, cut on demand.
@@ -1219,9 +1252,11 @@ def pack(ctx, dry_run) -> None:
             ref_new = (max(b.h for b in rows[ref_short])
                        if ref_short in rows else ref_old)
 
+            nudges = (subject.raw.get("nudge") or {})
             for anim, boxes in rows.items():
                 if anim in retired:
                     continue
+                cut_mod.apply_nudges(boxes, nudges.get(anim) or {})
                 atlas_key = f"{prefix}{anim}"
                 old = (existing.get(group) or {}).get(atlas_key) or []
                 images = [keyed.crop((b.x, b.y, b.x + b.w, b.y + b.h)) for b in boxes]
