@@ -82,6 +82,33 @@ export class Sheet {
 
   actor(group, opts = {}) { return new Actor(this, group, opts); }
 
+  /** How far frame `index` reaches to the LEFT and RIGHT of where the
+   *  character stands, in the same units as `scale * tile`.
+   *
+   * A trimmed frame is not centred on its character -- f[5] is where they
+   * stand within it -- so half its width is not how far it sticks out either
+   * way. AXI needs the two apart: Masie's collision box is 0.72 tiles wide and
+   * her swim pose is 2.07, nearly a tile of it in front of her, so swimming up
+   * to a wall drew her head inside it.
+   *
+   * In WORLD directions, not "ahead" and "behind". The art is drawn facing one
+   * way and mirrored for the other, so the character's front is always
+   * `w - anchor` from where they stand -- what the flip changes is which side
+   * of the world that lands on. Naming the sides after the character invites
+   * the caller to work that out, and working it out backwards is exactly the
+   * bug that reversed every sway on a left-facing sprite.
+   */
+  extent(group, name, index, { scale = 1, tile = 1, flip = 1 } = {}) {
+    const list = this.row(group, name);
+    if (!list.length) return null;
+    const f = list[Math.min(index, list.length - 1)];
+    const s = scale * ((this.d.scales || {})[group + '/' + name] || 1) * tile;
+    const back = (f.length > 5 ? f[5] : f[2] / 2) * s;   // behind them, as drawn
+    const front = f[2] * s - back;                        // and in front of them
+    return flip < 0 ? { left: front, right: back } : { left: back, right: front };
+  }
+
+
   /**
    * Draw frame `index` of one row, standing at (x, y).
    *

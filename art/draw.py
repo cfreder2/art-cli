@@ -66,7 +66,7 @@ def generate(
     references: list[str],
     out: Path,
     model: str | None = None,
-    timeout: int = 600,
+    timeout: int = 1500,
 ) -> Drawn:
     """Run one generation and copy the plate to `out`."""
     if not available():

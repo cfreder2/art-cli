@@ -87,7 +87,7 @@ def test_identity_carries_the_rendering_when_it_is_the_only_anchor(game):
     prof = _profile(game)
     masie = Subject("masie", state="legacy", raw={"source": {"sheet": "frog.png"}})
     block = prompt_block(resolve(prof, masie))
-    assert "how she is drawn" in block and "line weight" in block
+    assert "how they are drawn" in block and "line weight" in block
 
 
 def test_pose_takes_nothing_but_the_posing(game):

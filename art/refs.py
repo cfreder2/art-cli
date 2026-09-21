@@ -40,7 +40,7 @@ ROLE_PRIORITY = {"style": 0, "pose": 1, "identity": 2, "template": 3,
 ROLE_INSTRUCTION = {
     "style": "match its brushwork, palette, line weight and outline; "
              "do not copy its subject or composition",
-    "identity": "this is WHO the character is, AND how she is drawn. Keep the "
+    "identity": "this is WHO the character is, AND how they are drawn. Keep the "
                 "colours, markings, proportions, costume and the rendering -- "
                 "line weight, shading, how soft or hard the edges are. Do NOT "
                 "copy its poses, its framing or its resolution: the poses are "

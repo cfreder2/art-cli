@@ -145,3 +145,43 @@ console.log(JSON.stringify([heightAt('none'), heightAt(0), heightAt('random')]))
         assert got is not None and got == pytest.approx(numeric), (
             f"phase={label} gave {got!r}, not the {numeric} a numeric phase "
             "gives -- the effect was silently lost")
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="node not available")
+def test_extent_measures_from_where_the_character_stands():
+    """A trimmed frame is not centred on its character, so half its width is
+    not how far it sticks out either way. Masie's collision box is 0.72 tiles
+    and her swim pose is 2.07 -- 0.96 of it in front of her -- so swimming up
+    to the pond's edge drew her whole head inside the dirt. Halving the width
+    would have said 1.03 either side and been wrong on both.
+
+    And it answers in WORLD directions. The art faces one way and is mirrored
+    for the other, so her snout is always `w - anchor` from where she stands;
+    the flip only decides which side of the world that is. Answering "ahead"
+    and "behind" made the caller work that out, and it worked it out backwards
+    -- the same mistake that reversed every sway on a left-facing sprite."""
+    import json
+    import pathlib as _p
+
+    runtime = _p.Path(__file__).parent.parent / "art" / "runtime.js"
+    harness = runtime.read_text() + """
+// A frame 100 wide whose character stands 30 in from its left edge: 30 behind
+// them and 70 in front, which halving the width would call 50 and 50.
+const atlas = { axi: { swim: [[0, 0, 100, 40, 0, 30]] }, scales: { 'axi/swim': 2 } };
+const sheet = new Sheet(atlas, {});
+const right = sheet.extent('axi', 'swim', 0, { scale: 0.5, tile: 1, flip: 1 });
+const left  = sheet.extent('axi', 'swim', 0, { scale: 0.5, tile: 1, flip: -1 });
+console.log(JSON.stringify([right, left, sheet.extent('axi', 'nope', 0)]));
+"""
+    node = shutil.which("node")
+    proc = subprocess.run([node, "--input-type=module"], input=harness,
+                          text=True, capture_output=True)
+    assert proc.returncode == 0, proc.stderr
+    right, left, missing = json.loads(proc.stdout)
+
+    # scale 0.5 x the row's own 2x multiplier = 1 unit per source pixel.
+    # Facing right, her snout is the 70 and it is to the right of her.
+    assert right == {"left": 30, "right": 70}
+    # Facing left, the SAME 70 of snout is now to the left of her.
+    assert left == {"left": 70, "right": 30}
+    assert missing is None, "a row that is not there has no extent"
