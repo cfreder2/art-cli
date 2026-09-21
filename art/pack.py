@@ -68,6 +68,7 @@ class Replacement:
     scale: float = 1.0
     old_frames: int = 0
     meta: dict = field(default_factory=dict)   # fps, loop, effects
+    ref: str = ""                   # the row of this group the game measures by
 
 
 @dataclass
@@ -146,29 +147,53 @@ def _median(values: list[float]) -> float:
     return ordered[mid] if n % 2 else (ordered[mid - 1] + ordered[mid]) / 2
 
 
+def _as_rows(row) -> list[list[int]]:
+    """A row as a list of frames, whether it was written flat or not."""
+    if not row:
+        return []
+    return [row] if not isinstance(row[0], list) else row
+
+
+def _row_size(row: list[list[int]]) -> float:
+    """How big a row LOOKS: the median apparent size of its frames."""
+    return _median([_apparent(f[2], f[3]) for f in row])
+
+
+def _box_size(boxes: list[cut_mod.Box]) -> float:
+    return _median([_apparent(b.w, b.h) for b in boxes])
+
+
 def scale_for(new_boxes: list[cut_mod.Box], old: list[list[int]],
-              ref_old: float, ref_new: float) -> float:
+              ref_new: list[cut_mod.Box], ref_old: list[list[int]]) -> float:
     """What to multiply the character's base scale by for this row.
 
-    The game derives ONE scale per character from a reference frame -- AXI uses
-    `1.15 / atlas.axi.idle[0][3]` -- and applies it to every row. Preserving how
-    big she LOOKS in a row means preserving that row's apparent size relative to
-    the reference, so the multiplier cancels whatever the redraw changed.
+    The game derives ONE scale per character by measuring a reference row OUT
+    OF THE ATLAS -- `1.15 / atlas.axi.idle[0][3]` -- so that measurement
+    already accounts for however the reference was redrawn. What is left for
+    this multiplier is only the part the measurement cannot see: how this row's
+    size RELATIVE TO THE REFERENCE changed.
 
-    Measured on the tallest frame first, which was wrong: the redrawn poses vary
-    far more in height than the old ones did, so matching their ceilings left
-    the shortest frame of `fall` drawn at 85px where it used to be 127. She
-    visibly shrank mid-jump. The median of the geometric mean is steady through
-    a stretch, and it is a median so one extreme pose cannot drag it.
+    Which makes the reference row's own multiplier 1.0, by construction. It
+    was not: the ratio was taken as apparent-size-over-frame-0-HEIGHT, two
+    different measures of size, so the reference did not cancel. Masie came
+    out at 0.85 and drew at 0.979 tiles where the game asks for 1.15 -- every
+    row of her 15% small, consistently enough that it read as a style choice.
+    The frog was 3% large the same way.
+
+    Apparent size throughout, and a median of it: the redrawn poses vary far
+    more in height than the old ones did, so matching frame heights left the
+    shortest frame of `fall` drawn at 85px where it used to be 127 and she
+    visibly shrank mid-jump. The geometric mean holds through a stretch, and
+    the median keeps one extreme pose from dragging the row.
     """
-    if not old or not new_boxes or not ref_old or not ref_new:
+    # A reference row that is not itself being redrawn still sits in the atlas
+    # exactly as it was, so "before" and "after" are the same row.
+    new_ref = _box_size(ref_new) if ref_new else _row_size(ref_old)
+    old_ref = _row_size(ref_old)
+    old_size, new_size = _row_size(old), _box_size(new_boxes)
+    if not (old_size and new_size and old_ref and new_ref):
         return 1.0
-    old_size = _median([_apparent(f[2], f[3]) for f in old])
-    new_size = _median([_apparent(b.w, b.h) for b in new_boxes])
-    if not new_size or not old_size:
-        return 1.0
-    # Relative to the reference frame, which moves when that row is redrawn too.
-    return round((old_size / ref_old) / (new_size / ref_new), 5)
+    return round((old_size / old_ref) / (new_size / new_ref), 5)
 
 
 def uniform_scale_for(new_boxes: list[cut_mod.Box],
@@ -361,6 +386,29 @@ def merge(atlas_png: Path, atlas_json: Path, replacements: list[Replacement],
         scales[key] = rep.scale
         if rep.meta:
             anims[key] = rep.meta
+    # Rows of the same group that this pack did NOT redraw still have to move
+    # when the row the game measures by moves. The game sizes the whole group
+    # off that one row -- `1.05 / atlas.npc.frog_idle[0][3]` -- so redrawing it
+    # alone silently resizes every sibling. AXI's frog was redrawn at 339px
+    # against an original of 90-odd, and his four untouched rows went on being
+    # drawn at their own 45px through a scale meant for 339: four of his six
+    # animations became a speck a seventh of a tile tall. They were rows
+    # nothing drew any more, so nobody saw it -- but the boss is eight rows of
+    # one group, and the same redraw would have done the same to seven of them.
+    for group, ref_anim in {r.group: r.ref for r in replacements if r.ref}.items():
+        key = f"{group}/{ref_anim}"
+        now_ref = _row_size(_as_rows((data.get(group) or {}).get(ref_anim)))
+        old_ref = _row_size(_as_rows(base_rows.get(key))) or now_ref
+        if not now_ref or not old_ref or now_ref == old_ref:
+            continue
+        redrawn = {r.anim for r in replacements if r.group == group}
+        for anim, row in (data.get(group) or {}).items():
+            if anim in redrawn or _written_flat(row):
+                continue
+            # Untouched art, so its own size did not change: what changed
+            # underneath it is the scale the group is drawn at.
+            scales[f"{group}/{anim}"] = round(now_ref / old_ref, 5)
+
     data["scales"] = scales
     if anims:
         data["anims"] = anims

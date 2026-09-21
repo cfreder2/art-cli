@@ -161,24 +161,27 @@ def test_packing_twice_still_remembers_the_original_size(tmp_path):
 
     png, js = tmp_path / "atlas.png", tmp_path / "atlas.json"
     Image.new("RGBA", (64, 64), (10, 20, 30, 255)).save(png)
-    # One row, drawn 32px tall, and the reference row it is measured against.
+    # Two rows the same size, and `idle` is the one the game measures by.
     js.write_text(json.dumps({
         "image": "atlas.png", "w": 64, "h": 64,
         "axi": {"idle": [[0, 0, 32, 32, 0, 16]],
                 "jump": [[0, 0, 32, 32, 0, 16]]}}))
 
+    # The redraw is 3x, but `jump` came back half again as big on top of that
+    # -- exactly the drift the multiplier exists to undo.
+    redrawn = {"idle": cut_mod.Box(0, 0, 96, 96), "jump": cut_mod.Box(0, 0, 144, 144)}
+
     def pack_once():
-        art = Image.fromarray(np.full((96, 96, 4), 200, np.uint8))
-        reps = [pack_mod.Replacement(
-            group="axi", anim=anim, frames=[cut_mod.Box(0, 0, 96, 96)],
-            images=[art], old_frames=1,
-            # The redraw is 3x, but `jump` came back half again as big on top
-            # of that -- exactly the drift the multiplier exists to undo.
-            scale=pack_mod.scale_for(
-                [cut_mod.Box(0, 0, 96, 96)],
-                pack_mod.original_row(json.loads(js.read_text()), "axi", anim),
-                32, 96 if anim == "idle" else 144))
-            for anim in ("idle", "jump")]
+        reps = []
+        for anim, box in redrawn.items():
+            art = Image.fromarray(np.full((box.h, box.w, 4), 200, np.uint8))
+            reps.append(pack_mod.Replacement(
+                group="axi", anim=anim, frames=[box], images=[art], old_frames=1,
+                scale=pack_mod.scale_for(
+                    [box],
+                    pack_mod.original_row(json.loads(js.read_text()), "axi", anim),
+                    [redrawn["idle"]],
+                    pack_mod.original_row(json.loads(js.read_text()), "axi", "idle"))))
         return pack_mod.merge(png, js, reps, png, js)
 
     pack_once()
@@ -186,10 +189,37 @@ def test_packing_twice_still_remembers_the_original_size(tmp_path):
     pack_once()
     after_second = json.loads(js.read_text())["scales"]["axi/jump"]
 
-    assert after_first != 1.0, "the first pack should have corrected the drift"
+    assert after_first == pytest.approx(1 / 1.5, rel=1e-3), \
+        "the first pack should have undone the 1.5x drift"
     assert after_second == after_first, (
         f"the correction decayed to {after_second} on the second pack; "
         "the original size was overwritten by the redraw")
+
+
+def test_the_reference_row_is_never_rescaled(tmp_path):
+    """The game sizes a character BY the reference row, read out of the atlas
+    it is drawing from -- `1.15 / atlas.axi.idle[0][3]`. That measurement
+    already accounts for however the row was redrawn, so a multiplier on top
+    of it corrects the same thing twice.
+
+    It did. `scale_for` divided apparent size by frame-0 HEIGHT, two different
+    measures, so the reference did not cancel: Masie packed at 0.85134 and
+    drew at 0.979 tiles where the game asks for 1.15. Every row of her was 15%
+    small at once, which is exactly the way a bug like this hides -- nothing
+    looked inconsistent, she was just smaller than she was meant to be."""
+    from art import pack as pack_mod
+    from art.cut import Box
+
+    was = [[0, 0, 32, 40, 0, 16]]
+    # Redrawn bigger, and reshaped: longer and lower, so frame height alone
+    # says something different from apparent size. This is the case that broke.
+    now = [Box(0, 0, 140, 96)]
+    assert pack_mod.scale_for(now, was, now, was) == 1.0
+
+    # And a row that came back the same size as the reference reads the same
+    # size as the reference, whatever either of them used to be.
+    assert pack_mod.scale_for(now, was, now, was) == \
+        pack_mod.uniform_scale_for(now, now, 1.0)
 
 
 def test_uniform_scale_makes_every_row_read_the_same_size():
@@ -213,3 +243,43 @@ def test_uniform_scale_makes_every_row_read_the_same_size():
     big_tall = [Box(0, 0, 100, 256)]
     assert (pack_mod.uniform_scale_for(big_tall, [Box(0, 0, 200, 200)], 1.0)
             == pytest.approx(1.25, rel=1e-3))
+
+
+def test_redrawing_the_reference_row_carries_its_untouched_siblings(tmp_path):
+    """A game sizes a whole group off one row -- `1.05 / frog_idle[0][3]` --
+    so redrawing that row alone resizes every row beside it, including the
+    ones this pack never looked at.
+
+    AXI's frog came back at 339px against an original of 90-odd, and his four
+    untouched rows went on being drawn at their own 45px through a scale meant
+    for 339: a seventh of a tile, a speck. Nothing drew those rows any more so
+    nobody saw it -- but Sir Croaks is eight rows of one group, and redrawing
+    only his idle would have done the same to the other seven."""
+    import json
+    import numpy as np
+    from PIL import Image
+    from art import cut as cut_mod, pack as pack_mod
+
+    png, js = tmp_path / "atlas.png", tmp_path / "atlas.json"
+    Image.new("RGBA", (64, 64), (10, 20, 30, 255)).save(png)
+    js.write_text(json.dumps({
+        "image": "atlas.png", "w": 64, "h": 64,
+        "frog": {"idle": [[0, 0, 40, 40, 0, 20]],      # the reference
+                 "sit":  [[0, 0, 40, 40, 0, 20]]}}))   # never redrawn
+
+    art = Image.fromarray(np.full((160, 160, 4), 200, np.uint8))
+    pack_mod.merge(png, js, [pack_mod.Replacement(
+        group="frog", anim="idle", frames=[cut_mod.Box(0, 0, 160, 160)],
+        images=[art], old_frames=1, scale=1.0, ref="idle")], png, js)
+
+    out = json.loads(js.read_text())
+    assert out["scales"]["frog/idle"] == 1.0, "the reference is never rescaled"
+    # The reference grew 4x, so the game's scale for the group is 4x smaller
+    # and the row that did not move needs 4x to stay where it was.
+    assert out["scales"]["frog/sit"] == pytest.approx(4.0, rel=1e-3)
+
+    # Which is the whole point: `sit` still draws the size it always did.
+    base_before = 1.05 / 40
+    base_after = 1.05 / out["frog"]["idle"][0][3]
+    assert (out["frog"]["sit"][0][3] * base_after * out["scales"]["frog/sit"]
+            == pytest.approx(40 * base_before, rel=1e-3))

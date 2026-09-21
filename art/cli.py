@@ -1515,36 +1515,22 @@ def pack(ctx, fmt, quality, dry_run) -> None:
     def _original(group: str, key: str) -> list[list[int]]:
         return pack_mod.original_row(existing, group, key)
 
-    # Frame 0 of each character's reference row, after redrawing -- and, for
-    # `uniform_scale`, the whole reference row, because every other row is
-    # measured against it.
+    # Each character's reference row, after redrawing. Every other row of that
+    # subject is measured against it, and the game measures the character
+    # against it too -- `1.15 / atlas.axi.idle[0][3]` -- which is why its own
+    # multiplier is 1.0 and not something computed.
     #
     # Resolved across the SUBJECT, not within one sheet. Masie is drawn one
     # sheet per animation, so `rows` in the loop below never holds more than
     # the sheet's own row: looking for `idle` there found it only while
     # packing idle itself, and uniform scale silently did nothing.
-    new_ref: dict[str, int] = {}
     ref_boxes: dict[str, list] = {}
     for name, subject, sh, keyed, rows in cut_sheets:
         prefix = (subject.raw.get("source") or {}).get("prefix", "")
         ref_key = subject.raw.get("scale_ref") or f"{prefix}idle"
         short = ref_key[len(prefix):] if prefix else ref_key
         if short in rows and rows[short]:
-            new_ref[name] = rows[short][0].h
             ref_boxes[name] = rows[short]
-
-    # The multiplier the reference row itself lands on, which every other row
-    # of that subject is then pulled to.
-    ref_muls: dict[str, float] = {}
-    for name, subject, sh, keyed, rows in cut_sheets:
-        if name in ref_muls or name not in ref_boxes:
-            continue
-        source = subject.raw.get("source") or {}
-        group, prefix = source.get("group", name), source.get("prefix", "")
-        ref_key = subject.raw.get("scale_ref") or f"{prefix}idle"
-        rl = pack_mod.original_row(existing, group, ref_key)
-        ref_muls[name] = pack_mod.scale_for(
-            ref_boxes[name], rl, rl[0][3] if rl else 0, new_ref.get(name, 0))
 
     replacements = []
     healed: dict[tuple[str, str], pack_mod.Replacement] = {}
@@ -1553,9 +1539,8 @@ def pack(ctx, fmt, quality, dry_run) -> None:
         group, prefix = source.get("group", name), source.get("prefix", "")
         retired = set(subject.raw.get("retired") or [])
         ref_key = subject.raw.get("scale_ref") or f"{prefix}idle"
-        ref_old_list = _original(group, ref_key)
-        ref_old = ref_old_list[0][3] if ref_old_list else 0
-        ref_new = new_ref.get(name, ref_old)
+        ref_old = _original(group, ref_key)
+        ref_new = ref_boxes.get(name) or []
 
         nudges = (subject.raw.get("nudge") or {})
         ref_short = ref_key[len(prefix):] if prefix else ref_key
@@ -1602,22 +1587,25 @@ def pack(ctx, fmt, quality, dry_run) -> None:
                                                feather=feather))
                     for im in images]
 
-            # The reference row is corrected too. Leaving it at 1.0 assumes the
-            # redraw kept the relationship between its frame HEIGHT and how big
-            # the character looks -- and Masie's redraw did not: she is a longer,
-            # lower salamander now, so the same frame height carries a visibly
-            # bigger animal. Uncorrected, she was 18% larger standing still than
-            # in every other state, and shrank the moment she moved.
-            scale = pack_mod.scale_for(boxes, old, ref_old, ref_new)
-            # ...and then, if the subject asks for it, every row is pulled to
-            # the size the REFERENCE row reads at, rather than to the size it
-            # itself used to read at. See uniform_scale_for: AXI's original art
-            # had jump at 0.96x her idle and landing at 0.90x, and preserving
-            # that faithfully preserved a character who shrank when she jumped.
-            if subject.raw.get("uniform_scale") and ref_boxes.get(name):
-                scale = (ref_muls[name] if anim == ref_short
-                         else pack_mod.uniform_scale_for(
-                             boxes, ref_boxes[name], ref_muls[name]))
+            # The reference row is 1.0 by definition: the game sizes the
+            # character BY that row, read out of this very atlas, so a
+            # multiplier on it would correct a redraw that has already been
+            # accounted for. It used to be computed like any other row and came
+            # out at 0.85 for Masie -- who then drew 15% smaller than the 1.15
+            # tiles the game asks for, in every state at once.
+            #
+            # Every other row keeps its size RELATIVE to that reference...
+            if anim == ref_short:
+                scale = 1.0
+            elif subject.raw.get("uniform_scale") and ref_new:
+                # ...unless the subject asks for uniform scale, in which case
+                # it is pulled to the reference instead of to what it used to
+                # be. AXI's original art had jump at 0.96x her idle and landing
+                # at 0.90x, and preserving that faithfully preserved a
+                # character who shrank every time she left the ground.
+                scale = pack_mod.uniform_scale_for(boxes, ref_new, 1.0)
+            else:
+                scale = pack_mod.scale_for(boxes, old, ref_new, ref_old)
 
             try:
                 normalised = fx_mod.normalise(subject.raw.get("effects") or {})
@@ -1632,7 +1620,7 @@ def pack(ctx, fmt, quality, dry_run) -> None:
 
             rep = pack_mod.Replacement(
                 group=group, anim=atlas_key, frames=boxes, images=images,
-                scale=scale, old_frames=len(old), meta=meta)
+                scale=scale, old_frames=len(old), meta=meta, ref=ref_key)
             replacements.append(rep)
             healed[(name, anim)] = rep
 
