@@ -181,7 +181,7 @@ console.log(JSON.stringify([right, left, sheet.extent('axi', 'nope', 0)]));
 
     # scale 0.5 x the row's own 2x multiplier = 1 unit per source pixel.
     # Facing right, her snout is the 70 and it is to the right of her.
-    assert right == {"left": 30, "right": 70}
+    assert right == {"left": 30, "right": 70, "top": 40}
     # Facing left, the SAME 70 of snout is now to the left of her.
-    assert left == {"left": 70, "right": 30}
+    assert left == {"left": 70, "right": 30, "top": 40}
     assert missing is None, "a row that is not there has no extent"

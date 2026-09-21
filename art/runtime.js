@@ -82,8 +82,8 @@ export class Sheet {
 
   actor(group, opts = {}) { return new Actor(this, group, opts); }
 
-  /** How far frame `index` reaches to the LEFT and RIGHT of where the
-   *  character stands, in the same units as `scale * tile`.
+  /** How far frame `index` reaches from where the character stands: to the
+   *  LEFT, to the RIGHT, and UP. Same units as `scale * tile`.
    *
    * A trimmed frame is not centred on its character -- f[5] is where they
    * stand within it -- so half its width is not how far it sticks out either
@@ -105,7 +105,13 @@ export class Sheet {
     const s = scale * ((this.d.scales || {})[group + '/' + name] || 1) * tile;
     const back = (f.length > 5 ? f[5] : f[2] / 2) * s;   // behind them, as drawn
     const front = f[2] * s - back;                        // and in front of them
-    return flip < 0 ? { left: front, right: back } : { left: back, right: front };
+    // `top` is how tall the pose is AS DRAWN, lift included, which is not the
+    // same as how tall the character is said to be: AXI's King is a 2.4-tile
+    // collision box drawn at 2.5, and the stars that orbit his head were
+    // placed off the box, so they circled his chin.
+    const top = (f[3] + (f[4] || 0)) * s;
+    return flip < 0 ? { left: front, right: back, top }
+                    : { left: back, right: front, top };
   }
 
 
