@@ -533,7 +533,8 @@ def _check_subject(prof, name, subject):
                 continue
             checked += 1
             where = f"{name}/{anim}"
-            _, minimum = subject.min_size(prof.tile_px)
+            # Per ANIM: a crouch is not held to the height she stands at.
+            _, minimum = subject.min_size(prof.tile_px, anim)
             findings += rules_mod.undersized(
                 boxes, subject.kind, minimum, prof.tile_px, where,
                 square=bool(subject.raw.get("square", True)))

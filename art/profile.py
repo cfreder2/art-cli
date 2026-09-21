@@ -45,9 +45,18 @@ class Subject:
     meta: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
 
-    def min_size(self, tile_px: int) -> tuple[int | None, int | None]:
+    def min_size(self, tile_px: int, anim: str | None = None) -> tuple[int | None, int | None]:
         """The minimum this subject may be drawn at, as (w, h). None where the
-        kind does not constrain that axis."""
+        kind does not constrain that axis.
+
+        An ANIM may declare its own `height_tiles`, and then that is the one
+        used. A character's height is the height they STAND at, and some poses
+        are not standing: a crouch, a crawl, a sprawl, anything folded down.
+        Held to the standing figure they read as undersized when they are the
+        size they are supposed to be, and the only ways out were to draw the
+        pose wrong or to waive a rule that was not broken -- a waiver that
+        records something false about the art.
+        """
         if self.kind == "tile":
             return tile_size_px(tile_px)
         if self.kind == "prop":
@@ -57,9 +66,14 @@ class Subject:
             if override:
                 return (int(override[0]), int(override[1]))
             return (prop_width_px(self.width_tiles, tile_px), None)
-        if self.height_tiles is None:
+        tiles = self.height_tiles
+        if anim:
+            per = (self.raw.get("anims") or {}).get(anim) or {}
+            if per.get("height_tiles") is not None:
+                tiles = float(per["height_tiles"])
+        if tiles is None:
             return (None, None)
-        return (None, min_drawn_px(self.height_tiles, tile_px))
+        return (None, min_drawn_px(tiles, tile_px))
 
 
 def backdrop_for(profile: "Profile", subject: "Subject") -> str:
