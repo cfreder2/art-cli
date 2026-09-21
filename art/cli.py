@@ -1613,6 +1613,22 @@ def pack(ctx, fmt, quality, dry_run) -> None:
                 scale = pack_mod.uniform_scale_for(boxes, ref_new, 1.0)
             else:
                 scale = pack_mod.scale_for(boxes, old, ref_new, ref_old)
+            # ...and a row may say no. Uniform scale reads a row's size from
+            # the MIDDLE of its frames, which asks that most of them be near a
+            # neutral pose. Sir Croaks' landing is half pancake, so the middle
+            # measured the squash rather than the drawing and pulled the whole
+            # row up 9% -- he swelled to 3.3 tiles every time he touched down.
+            #
+            # Measuring at the top of the frames instead fixes his landing and
+            # breaks Masie: her jump row's tallest frame is a full stretch, so
+            # matching tops shrinks everything around it, which is the "she
+            # gets smaller when she jumps" bug this was built to remove. A row
+            # of mostly-extreme poses cannot be told from a sheet drawn small
+            # without knowing which pose is neutral, and nothing here knows
+            # that. So it is said out loud, per row, and recorded.
+            override = (subject.raw.get("scale_override") or {}).get(anim)
+            if override is not None:
+                scale = float(override)
 
             try:
                 normalised = fx_mod.normalise(subject.raw.get("effects") or {})

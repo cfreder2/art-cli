@@ -283,3 +283,31 @@ def test_redrawing_the_reference_row_carries_its_untouched_siblings(tmp_path):
     base_after = 1.05 / out["frog"]["idle"][0][3]
     assert (out["frog"]["sit"][0][3] * base_after * out["scales"]["frog/sit"]
             == pytest.approx(40 * base_before, rel=1e-3))
+
+
+def test_a_row_can_refuse_the_scale_it_was_given():
+    """Uniform scale reads a row's size from the MIDDLE of its frames, which
+    asks that most of them be near a neutral pose. Sir Croaks' landing is half
+    pancake: the middle measured the squash rather than the drawing and pulled
+    the row up 9%, so he swelled to 3.3 tiles every time he touched down.
+
+    Measuring at the TOP of the frames instead fixes his landing and breaks
+    Masie -- her jump row's tallest frame is a full stretch, so matching tops
+    shrinks everything around it, which is the "she gets smaller when she
+    jumps" bug uniform scale was built to remove. A row of mostly-extreme
+    poses cannot be told from a sheet drawn small without knowing which pose
+    is neutral, and nothing in the packer knows that. So a subject can say."""
+    from art import pack as pack_mod
+    from art.cut import Box
+
+    ref = [Box(0, 0, 100, 100)] * 4                    # apparent 100 throughout
+    # Half of this row is flattened, so its median reads far smaller than the
+    # character was actually drawn -- and the correction over-inflates it.
+    squashed = [Box(0, 0, 160, 40), Box(0, 0, 150, 45),
+                Box(0, 0, 105, 95), Box(0, 0, 100, 100)]
+    pulled = pack_mod.uniform_scale_for(squashed, ref, 1.0)
+    assert pulled > 1.08, (
+        f"the squash should drag the median down and the correction up; got {pulled}")
+    # The row's own biggest frame is already the size of the reference, which
+    # is the evidence that the SHEET was fine and only the poses were low.
+    assert max(b.w * b.h for b in squashed) == 100 * 100
