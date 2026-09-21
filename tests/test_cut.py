@@ -1,3 +1,4 @@
+import pytest
 """Frame detection: gaps are the delimiter, and alpha is never binary."""
 
 import numpy as np
@@ -189,3 +190,26 @@ def test_packing_twice_still_remembers_the_original_size(tmp_path):
     assert after_second == after_first, (
         f"the correction decayed to {after_second} on the second pack; "
         "the original size was overwritten by the redraw")
+
+
+def test_uniform_scale_makes_every_row_read_the_same_size():
+    """AXI's original art had jump at 0.96x her idle and landing at 0.90x, so
+    preserving each row's old size preserved a character who shrank 4% when
+    she left the ground. Uniform scale matches apparent size across the
+    subject instead, and leaves the reference row alone."""
+    from art import pack as pack_mod
+    from art.cut import Box
+
+    ref = [Box(0, 0, 100, 100)]           # apparent 100
+    tall = [Box(0, 0, 50, 128)]           # apparent 80 -- reads 20% small
+    wide = [Box(0, 0, 200, 72)]           # apparent 120 -- reads 20% big
+
+    assert pack_mod.uniform_scale_for(ref, ref, 0.85) == 0.85, \
+        "the reference row must keep the multiplier it was given"
+    assert pack_mod.uniform_scale_for(tall, ref, 1.0) == pytest.approx(1.25, rel=1e-3)
+    assert pack_mod.uniform_scale_for(wide, ref, 1.0) == pytest.approx(0.8333, rel=1e-3)
+
+    # Scale-free: the same shapes drawn twice as large need the same correction.
+    big_tall = [Box(0, 0, 100, 256)]
+    assert (pack_mod.uniform_scale_for(big_tall, [Box(0, 0, 200, 200)], 1.0)
+            == pytest.approx(1.25, rel=1e-3))

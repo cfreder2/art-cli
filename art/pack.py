@@ -171,6 +171,60 @@ def scale_for(new_boxes: list[cut_mod.Box], old: list[list[int]],
     return round((old_size / ref_old) / (new_size / ref_new), 5)
 
 
+def uniform_scale_for(new_boxes: list[cut_mod.Box],
+                      ref_boxes: list[cut_mod.Box], ref_mul: float) -> float:
+    """What to multiply this row by so it READS the same size as the reference.
+
+    `scale_for` preserves each row's size relative to the art it replaces,
+    which is right when that art was consistent and wrong when it was not.
+    AXI's was not: her original jump measured 0.96x her idle and her landing
+    0.90x, so a faithful redraw reproduced a character who shrank 4% every
+    time she left the ground and 10% when she touched down. Nobody had ever
+    named it, but it was visible.
+
+    This ignores what the row used to be and matches apparent size across the
+    whole subject instead. A pose still changes SHAPE -- a jump is long and
+    low, a landing is folded -- it just stops changing how much of her there
+    is. Opt in per subject with `uniform_scale: true`, because a subject whose
+    rows are meant to differ in size (a boss that swells) must not have that
+    flattened.
+    """
+    if not new_boxes or not ref_boxes:
+        return ref_mul
+    here = _median([_apparent(b.w, b.h) for b in new_boxes])
+    there = _median([_apparent(b.w, b.h) for b in ref_boxes])
+    if not here or not there:
+        return ref_mul
+    return round(ref_mul * there / here, 5)
+
+
+def inset_of(img: Image.Image, solid: float = 0.9) -> float:
+    """How far down a tile its art becomes SOLID, as a fraction of its height.
+
+    A terrain entry is written flat -- `[x, y, w, h, inset]` -- and the fifth
+    number is this, not the `lift` an animation frame carries there. The game
+    stands things on it: `grassSink` sinks a prop by the inset of the tile it
+    is standing on, and `padDepth` raises a pond to meet a lily pad's leaf.
+
+    Writing `lift` into that slot instead fed a PIXEL count to something that
+    multiplies by a tile size and expects a fraction. A lily pad with lift 109
+    was drawn 109 tiles below the pond and vanished; trees floated off the
+    ground by the same mistake.
+
+    "Solid" is the first row that is covered nearly all the way across, which
+    is what standing on it means: a rock's dome only reaches that halfway down
+    (0.54), a log spans it at once (0.0), a lily pad a quarter of the way in.
+    """
+    a = np.asarray(img.convert("RGBA"))[..., 3]
+    if not a.size or not a.shape[0]:
+        return 0.0
+    covered = (a > 127).mean(axis=1)
+    rows = np.nonzero(covered >= solid)[0]
+    if not rows.size:
+        return 0.0
+    return round(float(rows[0]) / a.shape[0], 4)
+
+
 def original_row(data: dict, group: str, key: str) -> list[list[int]]:
     """What this row looked like before the tool first redrew it.
 
@@ -291,7 +345,14 @@ def merge(atlas_png: Path, atlas_json: Path, replacements: list[Replacement],
             siblings = [v for v in (data.get(rep.group) or {}).values() if v]
             flat = bool(siblings) and (
                 sum(_written_flat(v) for v in siblings) * 2 > len(siblings))
-        data.setdefault(rep.group, {})[rep.anim] = frames[0] if flat else frames
+        if flat:
+            # Five numbers, and the fifth is the inset fraction -- NOT the
+            # lift an animation frame carries in that slot. See inset_of.
+            x, y, w, h = frames[0][:4]
+            data.setdefault(rep.group, {})[rep.anim] = [
+                x, y, w, h, inset_of(rep.images[0])]
+        else:
+            data.setdefault(rep.group, {})[rep.anim] = frames
 
     scales = dict(data.get("scales") or {})
     anims = dict(data.get("anims") or {})

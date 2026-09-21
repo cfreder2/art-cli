@@ -1515,14 +1515,36 @@ def pack(ctx, fmt, quality, dry_run) -> None:
     def _original(group: str, key: str) -> list[list[int]]:
         return pack_mod.original_row(existing, group, key)
 
-    # Frame 0 of each character's reference row, after redrawing.
+    # Frame 0 of each character's reference row, after redrawing -- and, for
+    # `uniform_scale`, the whole reference row, because every other row is
+    # measured against it.
+    #
+    # Resolved across the SUBJECT, not within one sheet. Masie is drawn one
+    # sheet per animation, so `rows` in the loop below never holds more than
+    # the sheet's own row: looking for `idle` there found it only while
+    # packing idle itself, and uniform scale silently did nothing.
     new_ref: dict[str, int] = {}
+    ref_boxes: dict[str, list] = {}
     for name, subject, sh, keyed, rows in cut_sheets:
         prefix = (subject.raw.get("source") or {}).get("prefix", "")
         ref_key = subject.raw.get("scale_ref") or f"{prefix}idle"
         short = ref_key[len(prefix):] if prefix else ref_key
         if short in rows and rows[short]:
             new_ref[name] = rows[short][0].h
+            ref_boxes[name] = rows[short]
+
+    # The multiplier the reference row itself lands on, which every other row
+    # of that subject is then pulled to.
+    ref_muls: dict[str, float] = {}
+    for name, subject, sh, keyed, rows in cut_sheets:
+        if name in ref_muls or name not in ref_boxes:
+            continue
+        source = subject.raw.get("source") or {}
+        group, prefix = source.get("group", name), source.get("prefix", "")
+        ref_key = subject.raw.get("scale_ref") or f"{prefix}idle"
+        rl = pack_mod.original_row(existing, group, ref_key)
+        ref_muls[name] = pack_mod.scale_for(
+            ref_boxes[name], rl, rl[0][3] if rl else 0, new_ref.get(name, 0))
 
     replacements = []
     healed: dict[tuple[str, str], pack_mod.Replacement] = {}
@@ -1536,6 +1558,7 @@ def pack(ctx, fmt, quality, dry_run) -> None:
         ref_new = new_ref.get(name, ref_old)
 
         nudges = (subject.raw.get("nudge") or {})
+        ref_short = ref_key[len(prefix):] if prefix else ref_key
         for anim, boxes in rows.items():
             if anim in retired:
                 continue
@@ -1553,6 +1576,17 @@ def pack(ctx, fmt, quality, dry_run) -> None:
             # carry a water surface that only repeats sideways and the water
             # under it, which is stacked as well.
             axis = seams_mod.axis_for(subject.raw.get("seamless"), anim)
+            if axis and subject.kind == "tile" and subject.raw.get("fill") is not False:
+                # A repeating tile is laid on a SQUARE grid cell, so a tile cut
+                # 604x660 is stretched by different amounts on each axis and
+                # its wrap no longer meets itself: AXI's pond drew a line down
+                # every column boundary. Squared BEFORE the wrap is computed,
+                # so the edges that are blended are the edges that will touch.
+                from PIL import Image as _I
+                side = max(im.width for im in images) if images else 0
+                images = [im if im.size == (side, side)
+                          else im.resize((side, side), _I.LANCZOS)
+                          for im in images]
             if axis and subject.kind == "tile":
                 import numpy as np
                 from PIL import Image as _Image
@@ -1575,6 +1609,15 @@ def pack(ctx, fmt, quality, dry_run) -> None:
             # bigger animal. Uncorrected, she was 18% larger standing still than
             # in every other state, and shrank the moment she moved.
             scale = pack_mod.scale_for(boxes, old, ref_old, ref_new)
+            # ...and then, if the subject asks for it, every row is pulled to
+            # the size the REFERENCE row reads at, rather than to the size it
+            # itself used to read at. See uniform_scale_for: AXI's original art
+            # had jump at 0.96x her idle and landing at 0.90x, and preserving
+            # that faithfully preserved a character who shrank when she jumped.
+            if subject.raw.get("uniform_scale") and ref_boxes.get(name):
+                scale = (ref_muls[name] if anim == ref_short
+                         else pack_mod.uniform_scale_for(
+                             boxes, ref_boxes[name], ref_muls[name]))
 
             try:
                 normalised = fx_mod.normalise(subject.raw.get("effects") or {})
