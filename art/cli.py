@@ -725,6 +725,13 @@ def prompt(ctx, sheet, note) -> None:
     prof = _load(ctx.obj["project"])
     subject, sh, pl = _sheet_for(prof, sheet)
     refs = resolve_refs(prof, subject)
+    # Including the flagged frames, because `draw` includes them. A preview
+    # that leaves them out is not a preview: it says a note was not sent when
+    # it was about to be, and the one thing this command promises is that what
+    # it prints is what goes.
+    flagged = _issue_note(subject, sh)
+    if flagged:
+        note = (note + " " if note else "") + flagged
     click.echo(build_prompt(prof, subject, sh, pl, refs, note))
     if refs:
         console.print("\n[dim]attachments, in order: "
