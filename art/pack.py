@@ -37,7 +37,22 @@ from art import cut as cut_mod
 # where that hurts: its two edges have to match each other, and the neighbours
 # bleeding in are different on each side. Measured on water_col, the wrap went
 # from 2.4x compressed alone to 10.0x compressed in the atlas.
-GUTTER = 18
+GUTTER = 24
+
+# ...and widening the gutter alone does not fix it, because the gutter is
+# TRANSPARENT BLACK. AXI's water tiles arrived wrapping at 1.1 levels and came
+# out of the atlas at 17, and the damage was one column deep: the left edge of
+# water_body averaged 26 levels of red darker than the column beside it, which
+# is the empty canvas bleeding in. Distance does not help when the thing
+# bleeding in is black; what helps is the edge not being a cliff. Widening the
+# gutter to 48 only moved which tile it ruined.
+#
+# So every frame is pasted with its own edge pixels extruded into the gutter
+# around it. Whatever the encoder averages across the boundary is then the
+# frame's own colour, and the recorded rect still points at the frame itself.
+# It is the standard atlas bleed, arrived at from compression rather than from
+# bilinear sampling.
+BLEED = 8
 
 # WebP cannot encode either dimension past this. PNG can, but an atlas that
 # only WebP cannot hold is an atlas that cannot ship.
@@ -63,6 +78,23 @@ class PackResult:
     width: int = 0
     height: int = 0
     added_px: int = 0
+
+
+def _extruded(img: Image.Image, b: int) -> Image.Image:
+    """`img` with its own edge pixels repeated `b` deep on all four sides.
+
+    Clamp, not wrap. A seamless tile's two edges already agree, so repeating
+    either one is right there; a character frame's do not, and wrapping one
+    would paste its tail beside its nose for the encoder to average in.
+    """
+    return Image.fromarray(
+        np.pad(np.asarray(img), ((b, b), (b, b), (0, 0)), mode="edge"))
+
+
+def _written_flat(entry) -> bool:
+    """Is this atlas entry one frame written flat, rather than a list of them?"""
+    return bool(isinstance(entry, list) and entry
+                and isinstance(entry[0], (int, float)))
 
 
 def cut_sheet(path: Path, backdrop: str, names: list[str],
@@ -139,11 +171,42 @@ def scale_for(new_boxes: list[cut_mod.Box], old: list[list[int]],
     return round((old_size / ref_old) / (new_size / ref_new), 5)
 
 
+def original_row(data: dict, group: str, key: str) -> list[list[int]]:
+    """What this row looked like before the tool first redrew it.
+
+    `scale_for` needs the size the row USED to be. Reading that out of the
+    atlas reads the last pack's output -- which is the redraw it is meant to
+    be measuring -- so old == new and every multiplier rounds to exactly 1.0.
+    `base_rows` is the snapshot taken the first time each row was replaced;
+    falling back to the live row is right only before that first pack.
+    """
+    row = (data.get("base_rows") or {}).get(f"{group}/{key}")
+    if row is None:
+        row = (data.get(group) or {}).get(key)
+    if not row:
+        return []
+    # A terrain entry is ONE frame written flat; wrap it so either shape
+    # iterates as frames.
+    return [row] if not isinstance(row[0], list) else row
+
+
 def merge(atlas_png: Path, atlas_json: Path, replacements: list[Replacement],
           out_png: Path, out_json: Path, quality: int = 90) -> PackResult:
     """Append the new frames below the existing atlas and repoint the rows."""
     base = Image.open(atlas_png).convert("RGBA")
     data = json.loads(atlas_json.read_text())
+
+    # "The existing atlas" means the art this tool did not draw -- not whatever
+    # the last pack happened to leave behind. Every accepted sheet is re-cut on
+    # every run, so the region a previous pack appended is superseded in full,
+    # and appending below it instead of over it grows the file by the whole
+    # redraw each time. AXI's reached 4103x14503 and stopped packing at all:
+    # WebP cannot encode a side past 16383. So the untouched base is measured
+    # once, recorded, and cropped back to on every pack after the first.
+    base_w = int(data.get("base_w") or base.width)
+    base_h = int(data.get("base_h") or base.height)
+    if (base_w, base_h) != base.size:
+        base = base.crop((0, 0, base_w, base_h))
 
     # How wide to make the new region. Appending everything below in the old
     # atlas's 1024px column made a strip 20,000px tall, which WebP cannot
@@ -152,21 +215,25 @@ def merge(atlas_png: Path, atlas_json: Path, replacements: list[Replacement],
     new = [img for rep in replacements for img in rep.images]
     area = sum(img.width * img.height for img in new)
     widest = max((img.width for img in new), default=1)
-    width = max(base.width, widest + GUTTER, int((area * 1.25) ** 0.5))
+    width = max(base.width, widest + GUTTER + 2 * BLEED,
+                int((area * 1.25) ** 0.5))
     width = min(width, MAX_SIDE)
 
+    # Every frame is inset by BLEED so its extruded edge has somewhere to go
+    # that is neither off the canvas nor on top of the atlas being kept whole.
     shelves: list[list[tuple[Replacement, int, Image.Image]]] = []
-    x, shelf = 0, []
+    x, shelf = BLEED, []
     for rep in replacements:
         for i, img in enumerate(rep.images):
-            if x and x + img.width + GUTTER > width:
-                shelves.append(shelf); shelf = []; x = 0
+            if x > BLEED and x + img.width + BLEED > width:
+                shelves.append(shelf); shelf = []; x = BLEED
             shelf.append((rep, i, img))
             x += img.width + GUTTER
     if shelf:
         shelves.append(shelf)
 
-    added = sum(max(img.height for _, _, img in s) + GUTTER for s in shelves)
+    added = 2 * BLEED + sum(max(img.height for _, _, img in s) + GUTTER
+                            for s in shelves)
     height = base.height + added
     if height > MAX_SIDE or width > MAX_SIDE:
         raise ValueError(
@@ -177,16 +244,34 @@ def merge(atlas_png: Path, atlas_json: Path, replacements: list[Replacement],
     canvas.paste(base, (0, 0))
 
     placed: dict[tuple[str, str], list[list[int]]] = {}
-    y = base.height
+    y = base.height + BLEED
     for s in shelves:
-        x = 0
+        x = BLEED
         for rep, i, img in s:
-            canvas.paste(img, (x, y))
+            # The extruded copy is pasted, not the frame: it carries the frame
+            # in its middle and BLEED pixels of its own edge all round.
+            canvas.paste(_extruded(img, BLEED), (x - BLEED, y - BLEED))
             box = rep.frames[i]
             placed.setdefault((rep.group, rep.anim), []).append(
                 [x, y, img.width, img.height, box.lift, box.anchor])
             x += img.width + GUTTER
         y += max(img.height for _, _, img in s) + GUTTER
+
+    # The same argument as base_w/base_h, for the rows rather than the image.
+    # `scale_for` asks how big this row USED to look, and answering from
+    # `data` answers with the last pack's output -- which is the redraw it is
+    # supposed to be measuring. old == new, every scale collapses to exactly
+    # 1.0, and the correction silently does nothing: AXI packed 39 rows of
+    # 1.0 while her jump, climb, swim and defeat drifted 21-32% oversized.
+    # So each row is snapshotted the first time it is replaced, and never
+    # again -- the pristine art stays the reference however often we repack.
+    base_rows = dict(data.get("base_rows") or {})
+    for rep in replacements:
+        key = f"{rep.group}/{rep.anim}"
+        if key not in base_rows:
+            was0 = (data.get(rep.group) or {}).get(rep.anim)
+            if was0:
+                base_rows[key] = was0
 
     for rep in replacements:
         frames = placed[(rep.group, rep.anim)]
@@ -195,7 +280,17 @@ def merge(atlas_png: Path, atlas_json: Path, replacements: list[Replacement],
         # directly. Match whatever the atlas already does for that key rather
         # than deciding: it is the only thing that knows.
         was = (data.get(rep.group) or {}).get(rep.anim)
-        flat = isinstance(was, list) and was and isinstance(was[0], (int, float))
+        if was is not None:
+            flat = _written_flat(was)
+        else:
+            # ...and a key the atlas has never held knows nothing, so the GROUP
+            # it is joining decides. Defaulting to a list of frames wrote AXI's
+            # two new water tiles as [[x, y, w, h, ...]] among thirty flat
+            # siblings, and `tiles.water_body[0]` came back an array where the
+            # game wanted an x.
+            siblings = [v for v in (data.get(rep.group) or {}).values() if v]
+            flat = bool(siblings) and (
+                sum(_written_flat(v) for v in siblings) * 2 > len(siblings))
         data.setdefault(rep.group, {})[rep.anim] = frames[0] if flat else frames
 
     scales = dict(data.get("scales") or {})
@@ -210,6 +305,9 @@ def merge(atlas_png: Path, atlas_json: Path, replacements: list[Replacement],
         data["anims"] = anims
     data["image"] = out_png.name
     data["w"], data["h"] = canvas.width, canvas.height
+    data["base_w"], data["base_h"] = base_w, base_h
+    if base_rows:
+        data["base_rows"] = base_rows
 
     out_png.parent.mkdir(parents=True, exist_ok=True)
     if out_png.suffix.lower() == ".webp":

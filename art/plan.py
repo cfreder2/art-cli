@@ -179,8 +179,14 @@ def plan_subject(
         # cell. Terrain is twenty-seven separate subjects that want to be drawn
         # together so they share a material -- a dirt that does not match its
         # own ground is worse than either drawn alone.
-        if cols_override and len(anims) > 1 and all(
-                counts.get(a, 1) == 1 for a in anims):
+        # A PROP is a gallery even alone. It is one static drawing, never a
+        # cycle, so the single-entry case must not fall through to "one
+        # animation wrapped across the grid": that asks for DISTINCTLY
+        # different poses of a thing that has one, and it skips the per-item
+        # size line, which is how AXI's horizon band drifted from 3.95:1 to
+        # 6.82:1 and flattened every hill on the skyline.
+        if cols_override and all(counts.get(a, 1) == 1 for a in anims) and (
+                len(anims) > 1 or subject.kind == "prop"):
             cols = int(cols_override)
             rows = -(-len(anims) // cols)
             sheets.append(SheetPlan(

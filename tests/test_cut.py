@@ -114,3 +114,78 @@ def test_keyed_removes_the_backdrop_and_leaves_no_rind():
     visible = out[..., 3] > 40
     r, g, b = out[..., 0].astype(int), out[..., 1].astype(int), out[..., 2].astype(int)
     assert not (visible & (r > 170) & (g < 130) & (b > 110)).any()
+
+
+def test_packing_twice_does_not_grow_the_atlas(tmp_path):
+    """Every accepted sheet is re-cut on every pack, so what a previous pack
+    appended is superseded in full. Appending below it instead grew AXI's atlas
+    by the whole redraw each time, until it passed the side WebP can encode and
+    packing stopped working."""
+    import json
+    import numpy as np
+    from PIL import Image
+    from art import cut as cut_mod, pack as pack_mod
+
+    png, js = tmp_path / "atlas.png", tmp_path / "atlas.json"
+    Image.new("RGBA", (64, 64), (10, 20, 30, 255)).save(png)
+    js.write_text(json.dumps({"image": "atlas.png", "w": 64, "h": 64,
+                              "tiles": {"rock": [0, 0, 32, 32, 0, 16]}}))
+
+    def pack_once():
+        art = Image.fromarray(np.full((48, 48, 4), 200, np.uint8))
+        rep = pack_mod.Replacement(
+            group="tiles", anim="rock", frames=[cut_mod.Box(0, 0, 48, 48)],
+            images=[art], old_frames=1)
+        return pack_mod.merge(png, js, [rep], png, js)
+
+    first = pack_once()
+    second = pack_once()
+    assert (second.width, second.height) == (first.width, first.height)
+
+    # ...and the legacy art it was told to keep is still where it was.
+    kept = np.asarray(Image.open(png).convert("RGBA"))[:64, :64]
+    assert kept[..., 3].all(), "the base was cropped away, not just reused"
+
+
+def test_packing_twice_still_remembers_the_original_size(tmp_path):
+    """`scale_for` asks how big a row USED to look. Reading that from the
+    current atlas reads the LAST pack's output, so old == new, every scale
+    rounds to exactly 1.0, and the correction quietly stops correcting. AXI
+    shipped 39 rows of 1.0 while her jump, climb, swim and defeat sat 21-32%
+    oversized against an original that had held within 11%."""
+    import json
+    import numpy as np
+    from PIL import Image
+    from art import cut as cut_mod, pack as pack_mod
+
+    png, js = tmp_path / "atlas.png", tmp_path / "atlas.json"
+    Image.new("RGBA", (64, 64), (10, 20, 30, 255)).save(png)
+    # One row, drawn 32px tall, and the reference row it is measured against.
+    js.write_text(json.dumps({
+        "image": "atlas.png", "w": 64, "h": 64,
+        "axi": {"idle": [[0, 0, 32, 32, 0, 16]],
+                "jump": [[0, 0, 32, 32, 0, 16]]}}))
+
+    def pack_once():
+        art = Image.fromarray(np.full((96, 96, 4), 200, np.uint8))
+        reps = [pack_mod.Replacement(
+            group="axi", anim=anim, frames=[cut_mod.Box(0, 0, 96, 96)],
+            images=[art], old_frames=1,
+            # The redraw is 3x, but `jump` came back half again as big on top
+            # of that -- exactly the drift the multiplier exists to undo.
+            scale=pack_mod.scale_for(
+                [cut_mod.Box(0, 0, 96, 96)],
+                pack_mod.original_row(json.loads(js.read_text()), "axi", anim),
+                32, 96 if anim == "idle" else 144))
+            for anim in ("idle", "jump")]
+        return pack_mod.merge(png, js, reps, png, js)
+
+    pack_once()
+    after_first = json.loads(js.read_text())["scales"]["axi/jump"]
+    pack_once()
+    after_second = json.loads(js.read_text())["scales"]["axi/jump"]
+
+    assert after_first != 1.0, "the first pack should have corrected the drift"
+    assert after_second == after_first, (
+        f"the correction decayed to {after_second} on the second pack; "
+        "the original size was overwritten by the redraw")

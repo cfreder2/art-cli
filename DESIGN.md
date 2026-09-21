@@ -1658,6 +1658,40 @@ each other while the neighbours bleeding in differ on each side.
 near a compression block. At **18px**: water_col 10.0x -> 2.2x, vine 4.6x ->
 1.6x, for 0.1MB.
 
+## The gutter was the wrong shape, not the wrong size
+
+The water tiles left the blend wrapping at **1.1 levels** and came out of the
+atlas at **17**, and widening the 18px gutter did not help -- at 24 and 32 the
+damage moved to a different tile, and at 48 it took both. It was never a
+distance problem. The damage was **one column deep**: the left edge of
+`water_body` averaged 26 levels of red darker than the column beside it,
+because the gutter is transparent BLACK and the encoder averaged the tile's
+edge into it.
+
+So every frame is now pasted with its own edge pixels extruded 8px into the
+gutter around it, and the recorded rect still points at the frame. Whatever
+bleeds in is the frame's own colour. Water went to 2.2x/2.1x, and the ground
+family -- which had been failing at 2.3x, 2.7x and 2.6x since it was drawn --
+went seamless without being touched.
+
+This is the standard atlas bleed. It is worth writing down that it was arrived
+at from *compression*, not from bilinear sampling: the usual argument is about
+a draw call reading a neighbouring texel, which two pixels already prevented.
+
+## Packing twice grew the atlas by the whole redraw
+
+`merge` keeps the existing atlas whole and appends below it, which is right for
+the thing it was written for and wrong for the second run: **every accepted
+sheet is re-cut on every pack**, so the region a previous pack appended is
+superseded in full, and appending below it leaves the whole redraw behind as
+dead pixels. AXI's atlas reached **4103x14503** and then stopped packing at
+all, because WebP cannot encode a side past 16383 -- the error arrives as a
+failed pack with no obvious cause, which is the worst way to learn it.
+
+So the untouched base is measured on the first pack and recorded as `base_w`
+and `base_h`, and every pack after that crops back to it before appending.
+Three packs in a row now give the same 3983x7964.
+
 ## The seam metric needed an absolute floor
 
 Still water varies about **one level** internally, so a two-level wrap -- which
@@ -1820,3 +1854,61 @@ tall.
 Strips also need a much narrower seamless blend. Rolling a vine by half and
 blending paints a pale ghost vine through its own gaps: 8.3% of it at the
 default feather, 1.6% at 0.04, and the wrap closes either way.
+
+## A correction that measured itself
+
+`scales` exists so a row redrawn at higher resolution lands at the size it
+always had. It read the "before" size out of the current `atlas.json` — which
+after the first pack is the *previous pack's output*. So `old` was already the
+redraw, `old_size / ref_old == new_size / ref_new`, and every multiplier came
+back exactly `1.0`. AXI shipped 39 rows of `1.0` while Masie's jump, climb,
+swim and defeat sat 21–32% oversized against an original that had held within
+11%. Nothing failed, because the thing that was broken was the check.
+
+The image half of this was already solved: `merge()` crops back to
+`base_w`/`base_h` so the atlas does not grow by the whole redraw each pack. The
+JSON half was missed. `base_rows` now snapshots each row the first time it is
+replaced and never again, and `original_row()` is the one lookup both `cli` and
+the tests use.
+
+**The general shape:** a correction whose reference is its own output is not a
+correction. It will read as working — clean runs, plausible numbers — because
+it is comparing a thing to itself.
+
+## A prop is not a character
+
+Props went through `SHEET_RULES`, whose size line reads *"the character must be
+AT LEAST Npx tall in every frame. Fill the cell."* Told that, the generator drew
+every prop to one height. Eleven of AXI's fifteen changed shape at once: the
+flower from 1.78:1 to 0.76:1, the log from 3.15:1 to 1.59:1, the horizon band
+from 3.95:1 to 6.82:1 — which is what flattened the skyline, because the band is
+drawn at a fixed height and a wider one stretches every crest.
+
+Three things were missing, and all three mattered:
+
+- **`height_tiles` beside `width_tiles`.** `width_tiles` alone says how wide to
+  draw a prop and nothing about its shape, so the generator picked one.
+- **`PROP_RULES` and a per-item size**, stated in pixels in the cell listing.
+  A prop is neither a character nor a tile: no cycle, no groundline, no seam —
+  but it does have a shape, and that was the part nothing guarded.
+- **A lone prop is a gallery.** The gallery branch required `len(anims) > 1`, so
+  a single-item sheet fell through to "one animation wrapped across the grid"
+  and was asked for DISTINCTLY different poses of a static band.
+
+`rules.prop_shape` compares drawn aspect to declared aspect as a ratio of
+ratios, so it is scale-free — drawing the right prop twice as large is the
+resolution work, not a finding.
+
+### Where the prompt runs out
+
+The generator returns a ~1200px-wide strip whatever width is asked for, and
+about half the requested height. The horizon band's output aspect could not be
+dialled in from the prompt: three rolls gave 6.28:1, 7.12:1 and 5.34:1 against
+asks of 3.95:1 and 1.97:1. The log would not pass ~2.3:1 against an ask of
+3.14:1 across three rolls either.
+
+When the prompt runs out, move the constraint into the code that consumes the
+art. The horizon band's repeat **width** is now tied to the world — 13.4 tiles,
+what `ts * 3.4` produced from the original — so hill size no longer depends on
+the aspect that comes back at all. That is worth more than a band that happens
+to measure 3.95:1 once.

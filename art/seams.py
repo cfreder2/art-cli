@@ -77,10 +77,37 @@ AXES = {"horizontal": ("horizontal",), "vertical": ("vertical",),
 
 
 def axes_for(declared) -> tuple[str, ...]:
-    """The wraps to test, from a subject's `seamless:` value."""
-    if declared in AXES:
+    """The wraps to test, from one tile's resolved axis."""
+    if isinstance(declared, (str, bool)) and declared in AXES:
         return AXES[declared]
     return AXES["both"]
+
+
+def axis_for(declared, anim: str | None = None):
+    """One tile's axis, from a subject's `seamless:` value.
+
+    A string is the whole sheet. A map is per tile, because a sheet can carry
+    tiles that repeat differently: a water surface has a crest along its top
+    and only ever repeats sideways, while the water under it is stacked too.
+    One value on the subject cannot say both, and saying either one wrecks the
+    other tile.
+    """
+    if isinstance(declared, dict):
+        return declared.get(anim)
+    return declared
+
+
+def junction(upper: np.ndarray, lower: np.ndarray) -> SeamScore:
+    """Score the seam where one tile is STACKED on another.
+
+    `score` only ever compares a tile with itself, so two tiles that each wrap
+    perfectly both pass while the line between them is the one on screen. Same
+    metric, different pair of edges.
+    """
+    from art.seamless import junction_step
+    step, typical = junction_step(upper, lower)
+    ratio = step / typical if typical > 1e-6 else (0.0 if step < 1e-6 else 999.0)
+    return SeamScore("joint", ratio, step, typical)
 
 
 def score(rgb: np.ndarray, alpha: np.ndarray | None = None,

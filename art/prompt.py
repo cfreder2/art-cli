@@ -60,6 +60,32 @@ TILE_RULES = [
     "level of detail, so they read as the same world when laid side by side.",
 ]
 
+def _seam_rule(subject, sheet) -> str:
+    """The tiling rule for this sheet: one line, or one line per tile.
+
+    `seamless:` is a string for most sheets, and then every tile on the sheet
+    repeats the same way. Water is not most sheets: its surface has a crest and
+    only repeats sideways while the body under it is stacked as well, so the
+    sheet needs both rules and has to say which tile each belongs to.
+    """
+    from art import seams as seams_mod
+    declared = subject.raw.get("seamless")
+    if not isinstance(declared, dict):
+        return SEAM_RULES.get(declared, SEAM_RULES["both"])
+    lines = []
+    for anim in sheet.anims:
+        axis = seams_mod.axis_for(declared, anim)
+        lines.append(f"{anim}: {SEAM_RULES.get(axis, SEAM_RULES['both'])}")
+    joins = subject.raw.get("joins") or {}
+    for anim, under in joins.items():
+        if anim in sheet.anims and under in sheet.anims:
+            lines.append(
+                f"{anim} is drawn directly ON TOP OF {under} in the game, so "
+                f"where {anim} ends at its BOTTOM edge it must be the same "
+                f"water, colour and depth as the TOP edge of {under}.")
+    return "Each tile tiles differently. " + " ".join(lines)
+
+
 SEAM_RULES = {
     "horizontal": "It TILES SIDE BY SIDE: the artwork running off its LEFT edge "
                   "must continue exactly into what runs off its RIGHT edge, so "
@@ -110,6 +136,39 @@ SHEET_RULES = [
 ]
 
 
+# Rules every PROP sheet must follow. A prop is neither a character nor a tile:
+# it does not animate, so it has no cycle and no groundline to share, and it
+# does not repeat, so it has no seam. What it DOES have is a shape, and that is
+# the thing that kept going wrong -- props were prompted with SHEET_RULES,
+# whose size line reads "the character must be AT LEAST Npx tall in every
+# frame. Fill the cell." Told that, the generator drew every prop to the same
+# height: AXI's low sprawling flower came back upright at 0.76:1 where the art
+# it replaced was 1.78:1, and a fallen log came back stubby at 1.59:1 where it
+# had been 3.15:1. Eleven of fifteen props drifted that way. So the proportion
+# is stated per item, in pixels, and nothing here asks for a cell to be filled.
+PROP_RULES = [
+    "The background is FLAT {backdrop} and nothing else. Not white, not a "
+    "gradient, not a scene. It must be a colour the artwork never uses, so it "
+    "can be removed by colour alone -- including the pockets a flood fill "
+    "cannot reach, under a leaf and between two stems.",
+    "Outline every item in a dark colour far from the background. An outline "
+    "close to the background gets silently eaten when the background is keyed.",
+    "DRAW EACH ITEM AT THE SIZE GIVEN FOR IT, exactly. Each one fills its "
+    "cell in ONE direction and falls well short in the other -- that is what "
+    "makes a log read as long and low and a reed as tall and thin. Do NOT "
+    "even them out, do NOT square them up, and do NOT stretch an item to "
+    "reach the sides of its cell. Wide margins on two sides are correct.",
+    "NOTHING in the cell but the item itself. No ground, no shadow, no "
+    "companion object, no scenery behind it.",
+    "Every item stands upright as it would in the world, not tilted into its "
+    "cell to make it fit.",
+    "At least 24px of clear background between items.",
+    "No labels, no text, no numbers, no grid lines, no borders anywhere in the "
+    "OUTPUT. The reference images carry labels; those are for reading, not "
+    "for copying.",
+]
+
+
 def _per_frame(note, count: int) -> list[str]:
     """Pose-by-pose direction, when the profile gives it.
 
@@ -129,6 +188,71 @@ def _per_frame(note, count: int) -> list[str]:
     return lines
 
 
+def prop_size_px(entry, subject, tile_px: int = None) -> tuple[int, int] | None:
+    """The width and height, in pixels, to draw one prop at.
+
+    `width_tiles` alone says how WIDE to draw a prop in the game and says
+    nothing about its shape, so the generator was free to choose one -- and
+    chose wrong for eleven of AXI's fifteen props. `height_tiles` beside it
+    pins the proportion, and is read per item first because one decor sheet
+    carries a 3.6-tile tree and a 0.8-tile flower.
+    """
+    from art import spec as spec_mod
+    tile_px = tile_px or spec_mod.TARGET_TILE_PX
+    get = (lambda k: entry.get(k)) if isinstance(entry, dict) else (lambda k: None)
+    w = get("width_tiles") or subject.raw.get("width_tiles")
+    h = get("height_tiles") or subject.raw.get("height_tiles")
+    if not w or not h:
+        return None
+    return (round(float(w) * tile_px), round(float(h) * tile_px))
+
+
+def _shape_word(w: int, h: int) -> str:
+    """How the proportion reads in words, because a ratio alone did not land."""
+    r = w / h if h else 1.0
+    if r >= 2.5:
+        return "much wider than it is tall, long and low"
+    if r >= 1.4:
+        return "clearly wider than it is tall"
+    if r > 0.72:
+        return "roughly square"
+    if r > 0.4:
+        return "clearly taller than it is wide"
+    return "much taller than it is wide, tall and narrow"
+
+
+def prop_draw_size(entry, subject, sheet) -> tuple[int, int] | None:
+    """The size to ASK for: the declared proportion, grown to fill its cell.
+
+    The game draws a prop at a fixed tile width and takes its height from the
+    source aspect alone -- `ph = ts * (f[3] / f[2])` -- so the absolute size on
+    the sheet is free resolution and only the SHAPE is load-bearing. Asking for
+    the spec's own 192px-per-tile figures left a flower at 154x86 in a 418x627
+    cell, throwing away three quarters of the sheet for no reason.
+
+    Fitted in BOTH directions, up or down. A horizon band declares 13.4 tiles
+    by 3.4 -- 2579x653px, wider than the whole canvas -- and asking for that
+    is asking for nothing, since the generator cannot draw it and will pick
+    its own shape instead. Only the proportion is load-bearing, so scaling to
+    the cell costs nothing and keeps the instruction one that can be followed.
+    """
+    size = prop_size_px(entry, subject)
+    if not size or not sheet:
+        return size
+    w, h = size
+    # 0.92 keeps the clear background the frame-finder cuts on.
+    fit = min(sheet.cell_w * 0.92 / w, sheet.cell_h * 0.92 / h)
+    return (max(1, round(w * fit)), max(1, round(h * fit)))
+
+
+def _prop_size_phrase(entry, subject, sheet=None) -> str:
+    size = prop_draw_size(entry, subject, sheet)
+    if not size:
+        return ""
+    w, h = size
+    return f" [draw this one {w}x{h}px — {_shape_word(w, h)}]"
+
+
 def build(
     profile: Profile,
     subject: Subject,
@@ -138,6 +262,10 @@ def build(
     note: str = "",
 ) -> str:
     facing = subject.raw.get("facing", "right")
+    # Per-cell direction is read into `entry`, never into `note`: `note` is the
+    # caller's own art direction -- `--note`, and the frames `issues` flagged --
+    # and rebinding it here dropped that on the floor and printed the last
+    # animation's raw dict at the bottom of the prompt instead.
     anim_notes = subject.raw.get("anims") or {}
     if sheet.gallery:
         described = [
@@ -149,17 +277,18 @@ def build(
             "  The cells, in order:",
         ]
         for i, name in enumerate(sheet.anims, 1):
-            note = anim_notes.get(name, name)
-            text = note.get("summary", "") if isinstance(note, dict) else note
-            described.append(f"    Cell {i}: {name} — {text}")
+            entry = anim_notes.get(name, name)
+            text = entry.get("summary", "") if isinstance(entry, dict) else entry
+            described.append(f"    Cell {i}: {name} — {text}"
+                             + _prop_size_phrase(entry, subject, sheet))
         if sheet.cols * sheet.rows > len(sheet.anims):
             described.append(
                 f"  The last {sheet.cols * sheet.rows - len(sheet.anims)} cell(s) "
                 "are left completely EMPTY -- flat background, nothing drawn.")
     elif sheet.wrapped:
         only = sheet.anims[0]
-        note = anim_notes.get(only, "a " + only + " cycle")
-        summary = note.get("summary", "") if isinstance(note, dict) else note
+        entry = anim_notes.get(only, "a " + only + " cycle")
+        summary = entry.get("summary", "") if isinstance(entry, dict) else entry
         described = [
             f"  ONE continuous {sheet.wrapped}-frame {only} cycle, laid out "
             f"{sheet.cols} across and {sheet.rows} down. Read it left to right "
@@ -172,20 +301,30 @@ def build(
                if sheet.cols * sheet.rows > sheet.wrapped else ""),
             f"  {only} — {summary}",
         ]
-        described += _per_frame(note, sheet.wrapped)
+        described += _per_frame(entry, sheet.wrapped)
     else:
         described = []
         for i, name in enumerate(sheet.anims, 1):
-            note = anim_notes.get(name, "a " + name + " cycle")
-            summary = note.get("summary", "") if isinstance(note, dict) else note
+            entry = anim_notes.get(name, "a " + name + " cycle")
+            summary = entry.get("summary", "") if isinstance(entry, dict) else entry
             described.append(f"  Row {i}: {name} — {summary} ({sheet.cols} frames)")
-            described += ["  " + line for line in _per_frame(note, sheet.cols)]
+            described += ["  " + line for line in _per_frame(entry, sheet.cols)]
 
     from art.profile import backdrop_for
     backdrop = backdrop_for(profile, subject)
     if subject.kind == "tile":
-        seam = SEAM_RULES.get(subject.raw.get("seamless"), SEAM_RULES["both"])
+        # One sheet can carry tiles that repeat differently -- a water surface
+        # and the water under it -- so when the axes differ the rule is stated
+        # per tile instead of once for the sheet.
+        seam = _seam_rule(subject, sheet)
         source = (STRIP_RULES if subject.raw.get("fill") is False else TILE_RULES)
+    elif subject.kind == "prop":
+        # A prop is not a character. Prompting it with SHEET_RULES asked for a
+        # groundline it has no cycle to share, every limb it does not have, and
+        # -- the damaging one -- a uniform height that flattened every prop's
+        # shape to the same one.
+        seam = ""
+        source = PROP_RULES
     else:
         seam = ""
         source = SHEET_RULES
@@ -211,10 +350,15 @@ def build(
           f"Size: draw each tile as a SQUARE at least {sheet.min_drawn}px on a "
           f"side, filling its square completely.")
          if subject.kind == "tile" else
+         ("Size: each item has its OWN width and height, given beside it above. "
+          "Draw it at that size. These deliberately differ in SHAPE -- a fallen "
+          "log is long and low, a reed is tall and thin -- and flattening them "
+          "toward one common shape is the defect being fixed."
+          if subject.kind == "prop" else
          f"Size: the character must be AT LEAST {sheet.min_drawn}px tall in every "
         f"frame -- that is the point of this sheet, and a smaller drawing is the "
         f"defect being fixed. Fill the cell; leave about 20% of room for a pose "
-        f"that is taller or wider than the others."),
+        f"that is taller or wider than the others.")),
         "",
         "Constraints:",
         rules,

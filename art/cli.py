@@ -29,6 +29,7 @@ from art import effects as fx_mod
 from art import seams as seams_mod
 from art import pack as pack_mod
 from art import review as review_mod
+from art import prompt as prompt_mod
 from art import rules as rules_mod
 from art import scene as scene_mod
 from art import seamless as seamless_mod
@@ -510,6 +511,13 @@ def _check_subject(prof, name, subject):
         if sh.wrapped:
             groups = {sh.anims[0]: [b for r in rows for b in r.boxes]}
             expected = {sh.anims[0]: sh.wrapped}
+        elif sh.gallery:
+            # One cell per entry, row-major -- the reading `pack` uses. Mapping
+            # ROWS to names instead handed both cells of a two-across water
+            # sheet to `water_surface` and never looked at `water_body` at all.
+            cells = [b for r in rows for b in r.boxes]
+            groups = {n: [b] for n, b in zip(sh.anims, cells)}
+            expected = {a: 1 for a in sh.anims}
         else:
             groups = {sh.anims[i]: r.boxes for i, r in enumerate(rows)
                       if i < len(sh.anims)}
@@ -531,6 +539,14 @@ def _check_subject(prof, name, subject):
                 square=bool(subject.raw.get("square", True)))
             findings += rules_mod.merged_frames(len(boxes), expected.get(anim), where)
             findings += rules_mod.baseline_spread(boxes, where)
+            if subject.kind == "prop":
+                # A prop is one drawing, not a cycle, so its single box IS its
+                # shape -- and shape is the thing that drifted unnoticed.
+                findings += rules_mod.prop_shape(
+                    boxes[0],
+                    prompt_mod.prop_size_px((subject.raw.get("anims") or {})
+                                            .get(anim), subject, prof.tile_px),
+                    where)
             for i, b in enumerate(boxes):
                 sub_rgb = rgb[b.y:b.y + b.h, b.x:b.x + b.w]
                 sub_a = alpha[b.y:b.y + b.h, b.x:b.x + b.w]
@@ -622,6 +638,7 @@ def _check_seams(ctx, prof, chosen) -> None:
     table.add_column("tile"); table.add_column("size", justify="right")
     table.add_column("margin", justify="right")
     table.add_column("h-wrap", justify="right"); table.add_column("v-wrap", justify="right")
+    table.add_column("joint", justify="right")
     table.add_column("verdict")
 
     wanted = []
@@ -653,8 +670,21 @@ def _check_seams(ctx, prof, chosen) -> None:
         checked += 1
         rgb, alpha = crop[..., :3], crop[..., 3]
         margin = seams_mod.transparent_margin(alpha)
-        axes = seams_mod.axes_for(subject.raw.get("seamless"))
+        prefix = (subject.raw.get("source") or {}).get("prefix", "")
+        short = name[len(prefix):] if prefix else name
+        axes = seams_mod.axes_for(seams_mod.axis_for(
+            subject.raw.get("seamless"), short))
         scores = {s.axis: s for s in seams_mod.score(rgb, alpha, axes)}
+
+        # A tile that is STACKED on another has one more edge to get right, and
+        # scoring it against itself never looks at that edge: both tiles pass
+        # while the line between them is the one actually on screen.
+        under = (subject.raw.get("joins") or {}).get(short)
+        below = group.anims.get(f"{prefix}{under}") if under else None
+        if below is not None and below.frames:
+            b = below.frames[0]
+            other = px[b.y:b.y + b.h, b.x:b.x + b.w]
+            scores["joint"] = seams_mod.junction(crop[..., :3], other[..., :3])
         worst = max(scores.values(), key=lambda s: s.ratio)
         bad = (not worst.seamless) or any(v > 0 for v in margin.values())
         strict = subject.state == "accepted"
@@ -666,6 +696,7 @@ def _check_seams(ctx, prof, chosen) -> None:
             f"[red]{m}px[/red]" if m else "[green]0[/green]",
             f"{scores['horizontal'].ratio:.1f}×" if "horizontal" in scores else "[dim]—[/dim]",
             f"{scores['vertical'].ratio:.1f}×" if "vertical" in scores else "[dim]—[/dim]",
+            f"{scores['joint'].ratio:.1f}×" if "joint" in scores else "[dim]—[/dim]",
             ("[green]" if not bad else ("[bold red]" if strict else "[yellow]"))
             + worst.verdict() + ("[/green]" if not bad else ("[/bold red]" if strict else "[/yellow]")),
         )
@@ -675,7 +706,9 @@ def _check_seams(ctx, prof, chosen) -> None:
         return
     console.print(table)
     console.print("[dim]h-wrap/v-wrap: the step across the wrap over the tile's own "
-                  "median step. ~1× reads as continuous; large is a line.[/dim]")
+                  "median step. ~1× reads as continuous; large is a line.\n"
+                  "joint: the same step where this tile is stacked on the one it "
+                  "`joins`.[/dim]")
     if failures:
         console.print(f"[bold red]{failures} accepted tile(s) failed.[/bold red]")
         raise SystemExit(1)
@@ -1393,6 +1426,45 @@ def accept(ctx, sheet, candidate, note, force) -> None:
 
 # ---------------------------------------------------------------- pack --
 
+def _apply_joins(prof, healed: dict) -> list[str]:
+    """Blend every declared join, and say what moved.
+
+    `joins: {water_surface: water_body}` means the surface's bottom edge has to
+    continue into the body's top. Two tiles can each wrap perfectly and still
+    draw a line where one is stacked on the other, because making a tile
+    seamless only ever made it agree with ITSELF.
+
+    Runs after every tile has been healed, never during: a join to a tile whose
+    own wrap has not been closed yet copies an edge that is about to change.
+    """
+    import numpy as np
+    from PIL import Image as _Image
+
+    out: list[str] = []
+    for name, subject in prof.subjects.items():
+        for anim, under in (subject.raw.get("joins") or {}).items():
+            upper = healed.get((name, anim))
+            lower = healed.get((name, under))
+            if upper is None:
+                continue
+            if lower is None:
+                raise click.ClickException(
+                    f"{name}: `joins: {{{anim}: {under}}}` -- there is no "
+                    f"accepted `{under}` to join to. A tile can only be joined "
+                    f"to another tile of the same subject."
+                )
+            a = np.asarray(upper.images[0].convert("RGBA"))
+            b = np.asarray(lower.images[0].convert("RGBA"))
+            before, typical = seamless_mod.junction_step(a, b)
+            joined = seamless_mod.join_below(a, b)
+            after, _ = seamless_mod.junction_step(joined, b)
+            upper.images[0] = _Image.fromarray(joined)
+            ratio = lambda v: v / typical if typical > 1e-6 else 0.0
+            out.append(f"[dim]join[/dim] {anim} on {under}: "
+                       f"{ratio(before):.1f}\u00d7 \u2192 {ratio(after):.1f}\u00d7")
+    return out
+
+
 @main.command()
 @click.option("--format", "fmt", type=click.Choice(["webp", "png"]),
               default="webp", show_default=True,
@@ -1436,6 +1508,13 @@ def pack(ctx, fmt, quality, dry_run) -> None:
                 sh.cols, sh.wrapped, gallery=sh.gallery)
             cut_sheets.append((name, subject, sh, keyed, rows))
 
+    # What each row looked like BEFORE this tool first touched it, written by
+    # the packer and never overwritten. Asking `existing` instead asks the
+    # last pack's output, so every scale comes back 1.0 and the correction
+    # does nothing -- see the note beside base_rows in pack.merge.
+    def _original(group: str, key: str) -> list[list[int]]:
+        return pack_mod.original_row(existing, group, key)
+
     # Frame 0 of each character's reference row, after redrawing.
     new_ref: dict[str, int] = {}
     for name, subject, sh, keyed, rows in cut_sheets:
@@ -1446,12 +1525,13 @@ def pack(ctx, fmt, quality, dry_run) -> None:
             new_ref[name] = rows[short][0].h
 
     replacements = []
+    healed: dict[tuple[str, str], pack_mod.Replacement] = {}
     for name, subject, sh, keyed, rows in cut_sheets:
         source = subject.raw.get("source") or {}
         group, prefix = source.get("group", name), source.get("prefix", "")
         retired = set(subject.raw.get("retired") or [])
         ref_key = subject.raw.get("scale_ref") or f"{prefix}idle"
-        ref_old_list = (existing.get(group) or {}).get(ref_key) or []
+        ref_old_list = _original(group, ref_key)
         ref_old = ref_old_list[0][3] if ref_old_list else 0
         ref_new = new_ref.get(name, ref_old)
 
@@ -1461,14 +1541,18 @@ def pack(ctx, fmt, quality, dry_run) -> None:
                 continue
             cut_mod.apply_nudges(boxes, nudges.get(anim) or {})
             atlas_key = f"{prefix}{anim}"
-            old = (existing.get(group) or {}).get(atlas_key) or []
+            old = _original(group, atlas_key)
             images = [keyed.crop((b.x, b.y, b.x + b.w, b.y + b.h)) for b in boxes]
 
             # A generator cannot draw a seamless tile from a description -- the
             # ground family came back at 13x, 10x and 6x the tile's own step
             # across the wrap. It is an image-processing problem, so it is done
             # here rather than asked for again.
-            axis = subject.raw.get("seamless")
+            #
+            # The axis is resolved per TILE, not per subject: one sheet can
+            # carry a water surface that only repeats sideways and the water
+            # under it, which is stacked as well.
+            axis = seams_mod.axis_for(subject.raw.get("seamless"), anim)
             if axis and subject.kind == "tile":
                 import numpy as np
                 from PIL import Image as _Image
@@ -1503,9 +1587,17 @@ def pack(ctx, fmt, quality, dry_run) -> None:
                              for n, vals in effects.items()} or None),
             ) if v}
 
-            replacements.append(pack_mod.Replacement(
+            rep = pack_mod.Replacement(
                 group=group, anim=atlas_key, frames=boxes, images=images,
-                scale=scale, old_frames=len(old), meta=meta))
+                scale=scale, old_frames=len(old), meta=meta)
+            replacements.append(rep)
+            healed[(name, anim)] = rep
+
+    # Joins, in a second pass: a tile that sits on another is blended toward
+    # the HEALED copy of it, and the first pass is what heals it. Blending
+    # toward the raw cut would copy an edge that is about to change.
+    for line in _apply_joins(prof, healed):
+        console.print(line)
 
     if not replacements:
         raise click.ClickException("Nothing accepted to pack. Run `art accept` first.")
@@ -1577,11 +1669,19 @@ def cut(ctx, sheet, source, out_dir) -> None:
     out_dir = out_dir or (prof.root / "art" / "frames" / sh.name)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    boxes = ([b for r in rows for b in r.boxes] if sh.wrapped
-             else [b for r in rows for b in r.boxes])
-    names = ([sh.anims[0]] * len(boxes) if sh.wrapped
-             else [sh.anims[i] if i < len(sh.anims) else f"row{i+1}"
-                   for i, r in enumerate(rows) for _ in r.boxes])
+    boxes = [b for r in rows for b in r.boxes]
+    if sh.wrapped:
+        names = [sh.anims[0]] * len(boxes)
+    elif sh.gallery:
+        # One cell per entry, row-major -- the same reading `pack` uses. Naming
+        # by ROW instead, which is right for a sheet of animations, called both
+        # cells of a two-across water sheet `water_surface` and wrote the body
+        # out over the surface.
+        names = [sh.anims[i] if i < len(sh.anims) else f"cell{i + 1}"
+                 for i in range(len(boxes))]
+    else:
+        names = [sh.anims[i] if i < len(sh.anims) else f"row{i + 1}"
+                 for i, r in enumerate(rows) for _ in r.boxes]
     n = 0
     counts: dict[str, int] = {}
     for name, b in zip(names, boxes):
@@ -1775,7 +1875,8 @@ def scene(ctx, port, no_open) -> None:
                     })
                 elif subject.kind == "tile":
                     crop = px[r["y"]:r["y"] + r["h"], r["x"]:r["x"] + r["w"]]
-                    axis = subject.raw.get("seamless") or "both"
+                    axis = seams_mod.axis_for(
+                        subject.raw.get("seamless"), key) or "both"
                     got = seams_mod.score(crop[..., :3], crop[..., 3],
                                           seams_mod.axes_for(axis))
                     tiles.append({**r, "name": key, "seamless": str(axis),

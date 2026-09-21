@@ -178,3 +178,32 @@ def baseline_spread(boxes, name: str, allowed: float = 0.25) -> list[Finding]:
                         "-- intended for an airborne pose, a bob otherwise",
                         fatal=False)]
     return []
+
+
+def prop_shape(box, want: tuple[int, int] | None, name: str,
+               allowed: float = 0.25) -> list[Finding]:
+    """A prop drawn at a different proportion from the one it declares.
+
+    `width_tiles` fixes how wide a prop is drawn and lets its height follow the
+    art, so a prop that comes back a different SHAPE is silently resized by the
+    game rather than caught. Eleven of AXI's fifteen props drifted that way at
+    once -- the flower from 1.78:1 to 0.76:1, the log from 3.15:1 to 1.59:1,
+    the hill from 3.95:1 to 6.82:1 -- and nothing failed, because every rule
+    there was measured height, squareness or seams, and none measured shape.
+
+    Compared as a ratio of ratios, so it is scale-free: drawing the right prop
+    twice as large is fine and is what the resolution work was for.
+    """
+    if not want or not box or not box.h:
+        return []
+    want_w, want_h = want
+    if not want_h:
+        return []
+    got, expected = box.w / box.h, want_w / want_h
+    drift = got / expected
+    if 1 - allowed <= drift <= 1 + allowed:
+        return []
+    return [Finding("prop-shape", name,
+                    f"drawn {got:.2f}:1, declared {expected:.2f}:1 "
+                    f"({drift:.2f}x) -- {'wider' if drift > 1 else 'taller'} "
+                    "than the shape the game reserves for it")]

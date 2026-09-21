@@ -103,3 +103,19 @@ def test_a_soft_edge_is_not_an_eaten_outline():
     art[alpha == 0.45] = GREEN
     art[rules._silhouette_edge(alpha, threshold=0.85)] = (30, 25, 40)
     assert rules.outline(art, alpha, GREEN, "cloud") == []
+
+
+def test_a_prop_that_changes_shape_is_caught():
+    """Eleven of AXI's fifteen props came back a different shape and nothing
+    failed: every rule measured height, squareness or seams, none measured
+    shape. The flower went 1.78:1 -> 0.76:1, the log 3.15:1 -> 1.59:1."""
+    from art import rules
+    from art.cut import Box
+
+    # A flower declared low and wide (192x110) that came back upright.
+    assert rules.prop_shape(Box(0, 0, 150, 197), (192, 110), "decor/flower")
+    # The same flower drawn correctly, just twice as large -- which is the
+    # whole point of the resolution work and must not be a finding.
+    assert not rules.prop_shape(Box(0, 0, 384, 220), (192, 110), "decor/flower")
+    # A prop that declares no height cannot be judged.
+    assert not rules.prop_shape(Box(0, 0, 150, 197), None, "decor/flower")

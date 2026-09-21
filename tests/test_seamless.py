@@ -92,3 +92,49 @@ def test_a_narrow_feather_ghosts_far_less():
     wide, narrow = ghost(0.35), ghost(0.04)
     assert wide > 0.002, f"fixture does not ghost at all ({wide:.4f})"
     assert narrow < wide / 2, (narrow, wide)
+
+
+# --------------------------------------------------------------- joins --
+
+def test_a_join_closes_the_edge_between_two_tiles():
+    """Two tiles that each wrap perfectly still show a line where one is
+    stacked on the other: making a tile seamless only made it agree with
+    ITSELF, and nothing ever looked at the edge between them."""
+    from art.seamless import join_below, junction_step
+
+    surface = make_seamless(noisy(seed=1), "horizontal")
+    body = make_seamless(noisy(seed=2), "both")
+
+    before, typical = junction_step(surface, body)
+    joined = join_below(surface, body)
+    after, _ = junction_step(joined, body)
+
+    assert before / typical > 2.0, "fixture does not seam to begin with"
+    assert after / typical < before / typical
+    assert after < 4.0 or after / typical <= 2.0
+
+
+def test_the_joined_edge_is_the_edge_the_body_already_wraps():
+    """The point of the construction: after the blend the upper tile's last row
+    IS the body's last row, so upper-on-body is the same junction as
+    body-on-body -- which `both` already made continuous."""
+    from art.seamless import join_below
+
+    surface = make_seamless(noisy(seed=3), "horizontal")
+    body = make_seamless(noisy(seed=4), "both")
+    joined = join_below(surface, body)
+
+    assert np.abs(joined[-1].astype(float) - body[-1].astype(float)).mean() < 1.0
+
+
+def test_a_join_leaves_the_top_of_the_tile_alone():
+    """The crest is the whole reason the surface tile exists. A join that ate
+    it would have traded one bug for a worse one."""
+    from art.seamless import join_below
+
+    surface = make_seamless(noisy(seed=5), "horizontal")
+    body = make_seamless(noisy(seed=6), "both")
+    joined = join_below(surface, body, feather=0.25)
+
+    keep = int(joined.shape[0] * 0.6)
+    assert np.array_equal(joined[:keep], surface[:keep])
