@@ -111,12 +111,34 @@ def unspill(rgb: np.ndarray, key: tuple[int, int, int]) -> np.ndarray:
     Magenta spill leaves a pink rind, green leaves a yellow-green one. The fix
     is the same: where a pixel leans toward the key beyond what the other
     channels support, bring it back.
+
+    "Leans toward the key" has to mean the key's WHOLE hue, not just its
+    strongest channel. Magenta is red AND blue over green, so a pixel only
+    carries magenta spill if both of those are up. An orange is red over both
+    of the others -- that is its own colour, and clamping its red to the green
+    it happens to have turns it olive. AXI's Nibbler was drawn a bright orange
+    and keyed out an olive fish, and nothing downstream could tell, because an
+    olive fish is perfectly plausible.
+
+    A one-channel key like pure green keeps the old behaviour exactly: there
+    is only one channel to be up, so leaning toward it is the whole test.
     """
     out = rgb.astype(np.float32).copy()
     k = np.argsort(key)[::-1]          # the key's dominant channels, high to low
     hi, lo = k[0], k[-1]
     over = out[..., hi] - np.maximum(out[..., lo], out[..., k[1]])
-    mask = over > 0
+
+    kv = np.asarray(key, dtype=np.float32)
+    used = kv > kv.mean()              # the channels the key is actually made of
+    if used.all() or not used.any():
+        used = kv >= kv.max()
+    rest = np.flatnonzero(~used)
+    floor = out[..., rest].max(axis=-1) if rest.size else np.zeros(out.shape[:2], np.float32)
+    lean = np.ones(out.shape[:2], dtype=bool)
+    for c in np.flatnonzero(used):
+        lean &= out[..., c] > floor
+
+    mask = lean & (over > 0)
     out[..., hi] = np.where(mask, out[..., hi] - over, out[..., hi])
     return np.clip(out, 0, 255).astype(np.uint8)
 
